@@ -5,6 +5,7 @@ mod tabs;
 mod panels;
 mod app;
 pub mod utils;
+pub mod openswath_params;
 
 use clap::{command, Parser};
 use clap_derive::Parser;
