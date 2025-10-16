@@ -6,9 +6,11 @@ use arycal_common::config::{OpenSwathConfig, RawFileType};
 use egui::{ComboBox, DragValue, TextEdit, Ui, Color32};
 
 use crate::tabs::open_swath_tab::OpenSwathState;
-use crate::openswath_params::{ParamCache, ParamNode};
 
 use super::config_panel::edit_file_paths;
+
+// Import openswath_params - using the module directly since it's at crate root
+use crate::openswath_params;
 
 
 pub fn draw_osw_file_settings(ui: &mut Ui, osw_cfg: &mut OpenSwathConfig) {
@@ -154,7 +156,7 @@ pub fn draw_open_swath(ui: &mut Ui, config: &mut Input, state: &mut OpenSwathSta
         // Add "Validate Parameters" button
         if !osw_cfg.binary_path.as_os_str().is_empty() && osw_cfg.binary_path.exists() {
             if ui.button("🔄 Validate").on_hover_text("Validate parameters with OpenSwathWorkflow binary").clicked() {
-                match ParamCache::refresh(&osw_cfg.binary_path) {
+                match openswath_params::ParamCache::refresh(&osw_cfg.binary_path) {
                     Ok(cache) => {
                         log::info!("Successfully validated parameters from OpenSwathWorkflow");
                         
@@ -458,7 +460,7 @@ pub fn draw_open_swath(ui: &mut Ui, config: &mut Input, state: &mut OpenSwathSta
 
 /// Helper function to get parameter options from cached params
 fn get_param_options(binary_path: &PathBuf, param_path: &str) -> Option<Vec<String>> {
-    if let Ok(cache) = ParamCache::load_or_create(binary_path) {
+    if let Ok(cache) = openswath_params::ParamCache::load_or_create(binary_path) {
         if let Some(osw_node) = cache.params.children.get("OpenSwathWorkflow") {
             if let Some(param) = osw_node.find_param(param_path) {
                 if !param.valid_strings.is_empty() {
