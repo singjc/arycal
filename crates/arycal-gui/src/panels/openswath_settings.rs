@@ -244,23 +244,27 @@ pub fn draw_open_swath(ui: &mut Ui, config: &mut Input, state: &mut OpenSwathSta
              linear or quadratic) of all spectra."
         );
     
+        // Get available options from cached params, or fall back to defaults
+        let available_options = get_param_options(&osw_cfg.binary_path, "mz_correction_function")
+            .unwrap_or_else(|| vec![
+                "none".to_string(),
+                "regression_delta_ppm".to_string(),
+                "unweighted_regression".to_string(),
+                "weighted_regression".to_string(),
+                "quadratic_regression".to_string(),
+                "weighted_quadratic_regression".to_string(),
+                "weighted_quadratic_regression_delta_ppm".to_string(),
+                "quadratic_regression_delta_ppm".to_string(),
+            ]);
+        
         // Dropdown (combo box) for selecting the correction function
         egui::ComboBox::from_id_salt("mz_correction_fn")
             .selected_text(&osw_cfg.mz_correction_function)
             .show_ui(ui, |ui| {
-                for &opt in &[
-                    "none",
-                    "regression_delta_ppm",
-                    "unweighted_regression",
-                    "weighted_regression",
-                    "quadratic_regression",
-                    "weighted_quadratic_regression",
-                    "weighted_quadratic_regression_delta_ppm",
-                    "quadratic_regression_delta_ppm",
-                ] {
+                for opt in &available_options {
                     ui.selectable_value(
                         &mut osw_cfg.mz_correction_function,
-                        opt.to_string(),
+                        opt.clone(),
                         opt,
                     );
                 }
@@ -275,18 +279,22 @@ pub fn draw_open_swath(ui: &mut Ui, config: &mut Input, state: &mut OpenSwathSta
              first or to perform a datareduction step first. If you choose cache, \
              make sure to also set tempDirectory",
         );
+        
+        let available_options = get_param_options(&osw_cfg.binary_path, "readOptions")
+            .unwrap_or_else(|| vec![
+                "normal".to_string(),
+                "cache".to_string(),
+                "cacheWorkingInMemory".to_string(),
+                "workingInMemory".to_string(),
+            ]);
+        
         egui::ComboBox::from_id_salt("read_options")
             .selected_text(&osw_cfg.read_options)
             .show_ui(ui, |ui| {
-                for &opt in &[
-                    "normal",
-                    "cache",
-                    "cacheWorkingInMemory",
-                    "workingInMemory",
-                ] {
+                for opt in &available_options {
                     ui.selectable_value(
                         &mut osw_cfg.read_options,
-                        opt.to_string(),
+                        opt.clone(),
                         opt,
                     );
                 }
@@ -350,7 +358,18 @@ pub fn draw_open_swath(ui: &mut Ui, config: &mut Input, state: &mut OpenSwathSta
         egui::ComboBox::from_id_salt("rt_norm_alignment_method")
             .selected_text(&osw_cfg.rt_normalization_alignment_method)
             .show_ui(ui, |ui| {
-                for &opt in &["linear", "interpolated", "lowess", "b_spline"] {
+                let available_options = get_param_options(&osw_cfg.binary_path, "RTNormalization:alignmentMethod")
+            .unwrap_or_else(|| vec![
+                "linear".to_string(),
+                "interpolated".to_string(),
+                "lowess".to_string(),
+                "b_spline".to_string(),
+            ]);
+        
+        egui::ComboBox::from_id_salt("rt_norm_alignment_method")
+            .selected_text(&osw_cfg.rt_normalization_alignment_method)
+            .show_ui(ui, |ui| {
+                for opt in &available_options {
                     ui.selectable_value(
                         &mut osw_cfg.rt_normalization_alignment_method,
                         opt.to_string(),
@@ -371,13 +390,22 @@ pub fn draw_open_swath(ui: &mut Ui, config: &mut Input, state: &mut OpenSwathSta
             while ‘iter_residual’ removes the datapoint with largest residual \
             error (cheaper for many peptides)."
         );
+        
+        let available_options = get_param_options(&osw_cfg.binary_path, "RTNormalization:outlierMethod")
+            .unwrap_or_else(|| vec![
+                "iter_residual".to_string(),
+                "iter_jackknife".to_string(),
+                "ransac".to_string(),
+                "none".to_string(),
+            ]);
+        
         egui::ComboBox::from_id_salt("rt_norm_outlier_method")
             .selected_text(&osw_cfg.rt_normalization_outlier_method)
             .show_ui(ui, |ui| {
-                for &opt in &["iter_residual", "iter_jackknife", "ransac", "none"] {
+                for opt in &available_options {
                     ui.selectable_value(
                         &mut osw_cfg.rt_normalization_outlier_method,
-                        opt.to_string(),
+                        opt.clone(),
                         opt,
                     );
                 }
