@@ -406,4 +406,54 @@ mod tests {
         assert!(param.is_some());
         assert_eq!(param.unwrap().value, "lowess");
     }
+
+    #[test]
+    fn test_xml_parsing_with_realistic_structure() {
+        let xml = r#"<?xml version="1.0" encoding="ISO-8859-1"?>
+<PARAMETERS version="1.7.0" xsi:noNamespaceSchemaLocation="https://raw.githubusercontent.com/OpenMS/OpenMS/develop/share/OpenMS/SCHEMAS/Param_1_7_0.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <NODE name="OpenSwathWorkflow" description="Complete workflow for OpenSWATH">
+    <ITEM name="in" value="" type="input-file" description="Input files separated by blank" required="true" advanced="false" tags="input file,required" />
+    <ITEM name="tr" value="" type="input-file" description="Transition file" required="false" advanced="false" />
+    <ITEM name="readOptions" value="normal" type="string" description="Read options for all input files" required="false" advanced="false" restrictions="normal,cache,cacheWorkingInMemory,workingInMemory" />
+    <ITEM name="mz_extraction_window" value="0.05" type="double" description="Extraction window in m/z dimension (in ppm or Da)." required="false" advanced="false" />
+    <NODE name="RTNormalization" description="Parameters for RT normalization">
+      <ITEM name="alignmentMethod" value="linear" type="string" description="How to perform the alignment" required="false" advanced="false" />
+      <ITEMLIST name="alignmentMethod_options" type="string">
+        <LISTITEM value="linear"/>
+        <LISTITEM value="interpolated"/>
+        <LISTITEM value="lowess"/>
+        <LISTITEM value="b_spline"/>
+      </ITEMLIST>
+      <ITEM name="outlierMethod" value="iter_residual" type="string" description="Which outlier detection method to use" required="false" advanced="false" />
+    </NODE>
+  </NODE>
+</PARAMETERS>"#;
+
+        let result = parse_openms_ini(xml);
+        assert!(result.is_ok(), "Failed to parse XML: {:?}", result.err());
+        
+        let root = result.unwrap();
+        
+        // Check structure
+        assert!(root.children.contains_key("OpenSwathWorkflow"));
+        let osw = root.children.get("OpenSwathWorkflow").unwrap();
+        
+        // Check top-level items
+        let in_param = osw.items.iter().find(|p| p.name == "in");
+        assert!(in_param.is_some());
+        assert_eq!(in_param.unwrap().param_type, "input-file");
+        
+        // Check readOptions
+        let read_opts = osw.items.iter().find(|p| p.name == "readOptions");
+        assert!(read_opts.is_some());
+        assert_eq!(read_opts.unwrap().value, "normal");
+        
+        // Check nested node
+        assert!(osw.children.contains_key("RTNormalization"));
+        
+        // Check nested parameter using path
+        let align_method = osw.find_param("RTNormalization:alignmentMethod");
+        assert!(align_method.is_some());
+        assert_eq!(align_method.unwrap().value, "linear");
+    }
 }
