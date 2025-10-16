@@ -3,9 +3,10 @@ use std::{env, path::PathBuf, sync::Arc};
 use arycal_cli::input::Input;
 use arycal_cloudpath::util::find_executable;
 use arycal_common::config::{OpenSwathConfig, RawFileType};
-use egui::{ComboBox, DragValue, TextEdit, Ui};
+use egui::{ComboBox, DragValue, TextEdit, Ui, Color32};
 
 use crate::tabs::open_swath_tab::OpenSwathState;
+use crate::openswath_params::{ParamCache, ParamNode};
 
 use super::config_panel::edit_file_paths;
 
@@ -147,6 +148,39 @@ pub fn draw_open_swath(ui: &mut Ui, config: &mut Input, state: &mut OpenSwathSta
                 .pick_file() 
             {
                 osw_cfg.binary_path = file;
+            }
+        }
+
+        // Add "Validate Parameters" button
+        if !osw_cfg.binary_path.as_os_str().is_empty() && osw_cfg.binary_path.exists() {
+            if ui.button("🔄 Validate").on_hover_text("Validate parameters with OpenSwathWorkflow binary").clicked() {
+                match ParamCache::refresh(&osw_cfg.binary_path) {
+                    Ok(cache) => {
+                        log::info!("Successfully validated parameters from OpenSwathWorkflow");
+                        
+                        // Check if key parameters exist
+                        if let Some(osw_node) = cache.params.children.get("OpenSwathWorkflow") {
+                            let mut warnings = Vec::new();
+                            
+                            // Check some critical parameters
+                            if osw_node.find_param("RTNormalization:alignmentMethod").is_none() {
+                                warnings.push("RTNormalization:alignmentMethod");
+                            }
+                            if osw_node.find_param("mz_correction_function").is_none() {
+                                warnings.push("mz_correction_function");
+                            }
+                            
+                            if warnings.is_empty() {
+                                log::info!("All expected parameters found in OpenSwathWorkflow");
+                            } else {
+                                log::warn!("Some expected parameters not found: {:?}", warnings);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to validate parameters: {}", e);
+                    }
+                }
             }
         }
     });
@@ -384,4 +418,28 @@ pub fn draw_open_swath(ui: &mut Ui, config: &mut Input, state: &mut OpenSwathSta
             .lock_focus(true)
             .hint_text("e.g. -debug 10"),
     );
+
+    // Add info about parameter validation
+    if !osw_cfg.binary_path.as_os_str().is_empty() && osw_cfg.binary_path.exists() {
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label("ℹ");
+            ui.label("Use the 'Validate' button above to check parameter compatibility with your OpenSwathWorkflow version.");
+        });
+        ui.label("Advanced parameters can be used to specify any additional OpenSwathWorkflow flags not shown in this UI.");
+    }
+}
+
+/// Helper function to get parameter options from cached params
+fn get_param_options(binary_path: &PathBuf, param_path: &str) -> Option<Vec<String>> {
+    if let Ok(cache) = ParamCache::load_or_create(binary_path) {
+        if let Some(osw_node) = cache.params.children.get("OpenSwathWorkflow") {
+            if let Some(param) = osw_node.find_param(param_path) {
+                if !param.valid_strings.is_empty() {
+                    return Some(param.valid_strings.clone());
+                }
+            }
+        }
+    }
+    None
 }
