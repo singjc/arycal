@@ -355,10 +355,8 @@ pub fn draw_open_swath(ui: &mut Ui, config: &mut Input, state: &mut OpenSwathSta
             ‘lowess’: use local regression (for many, noisy anchor points). \
             ‘b_spline’: use B-splines for smoothing."
         );
-        egui::ComboBox::from_id_salt("rt_norm_alignment_method")
-            .selected_text(&osw_cfg.rt_normalization_alignment_method)
-            .show_ui(ui, |ui| {
-                let available_options = get_param_options(&osw_cfg.binary_path, "RTNormalization:alignmentMethod")
+        
+        let available_options = get_param_options(&osw_cfg.binary_path, "RTNormalization:alignmentMethod")
             .unwrap_or_else(|| vec![
                 "linear".to_string(),
                 "interpolated".to_string(),
@@ -372,7 +370,7 @@ pub fn draw_open_swath(ui: &mut Ui, config: &mut Input, state: &mut OpenSwathSta
                 for opt in &available_options {
                     ui.selectable_value(
                         &mut osw_cfg.rt_normalization_alignment_method,
-                        opt.to_string(),
+                        opt.clone(),
                         opt,
                     );
                 }
