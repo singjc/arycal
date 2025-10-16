@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use quick_xml::events::Event;
-use quick_xml::reader::Reader;
+use quick_xml::Reader;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
@@ -102,7 +102,7 @@ impl ParamNode {
 /// Parse OpenMS INI XML into a parameter tree
 pub fn parse_openms_ini(xml_content: &str) -> Result<ParamNode> {
     let mut reader = Reader::from_str(xml_content);
-    reader.trim_text(true);
+    reader.config_mut().trim_text(true);
 
     let mut root = ParamNode::new("root".to_string(), "OpenSwathWorkflow parameters".to_string());
     let mut node_stack = vec![&mut root as *mut ParamNode];
