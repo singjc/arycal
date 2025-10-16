@@ -2,6 +2,7 @@ mod config;
 mod tabs;
 mod panels;
 mod app;
+pub mod openswath_params;
 pub mod static_assets;
 pub mod utils;
 

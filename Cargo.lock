@@ -826,6 +826,7 @@ dependencies = [
  "log",
  "mime_guess",
  "os_pipe",
+ "quick-xml 0.37.5",
  "reqwest",
  "rfd",
  "rust-embed",
