@@ -32,9 +32,6 @@ Homepage = "https://github.com/singjc/arycal"
 Repository = "https://github.com/singjc/arycal"
 Documentation = "https://github.com/singjc/arycal"
 
-[project.scripts]
-arycal = "arycal:main"
-
 [tool.maturin]
 # The crate to build
 manifest-path = "../arycal-cli/Cargo.toml"
