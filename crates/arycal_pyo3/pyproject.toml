@@ -37,7 +37,7 @@ arycal = "arycal:main"
 
 [tool.maturin]
 # The crate to build
-manifest-path = "crates/arycal-cli/Cargo.toml"
+manifest-path = "../arycal-cli/Cargo.toml"
 # Python source directory
 python-source = "python"
 # Build the binary into the wheel

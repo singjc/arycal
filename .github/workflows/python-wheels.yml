@@ -27,7 +27,8 @@ jobs:
         with:
           maturin-version: latest
           command: build
-          args: --release --bindings bin --manifest-path crates/arycal-cli/Cargo.toml -o dist
+          args: --release --bindings bin -o ../../dist
+          working-directory: crates/arycal_pyo3
           
       - name: Upload wheels
         uses: actions/upload-artifact@v4

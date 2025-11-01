@@ -1,6 +1,6 @@
 # ARYCAL Python Package
 
-This directory contains the Python packaging for arycal, allowing you to install and use the arycal CLI from Python.
+This crate contains the Python packaging for arycal, allowing you to install and use the arycal CLI from Python.
 
 ## Installation
 
@@ -15,13 +15,13 @@ pip install arycal
 ```bash
 # Clone the repository
 git clone https://github.com/singjc/arycal.git
-cd arycal
+cd arycal/crates/arycal_pyo3
 
 # Install maturin (build tool)
 pip install maturin
 
 # Build and install the package
-maturin develop --bindings bin --manifest-path crates/arycal-cli/Cargo.toml
+maturin develop --bindings bin
 ```
 
 ## Usage
@@ -53,17 +53,20 @@ arycal.main()
 To build distributable wheels for different platforms:
 
 ```bash
+# From the arycal_pyo3 directory
+cd crates/arycal_pyo3
+
 # Build for the current platform
-maturin build --release --bindings bin --manifest-path crates/arycal-cli/Cargo.toml
+maturin build --release --bindings bin
 
 # Build with specific features (e.g., MPI support)
-maturin build --release --bindings bin --manifest-path crates/arycal-cli/Cargo.toml --features mpi
+maturin build --release --bindings bin --features mpi
 ```
 
-The built wheels will be in the `dist/` directory and can be installed with:
+The built wheels will be in the `../../dist/` directory and can be installed with:
 
 ```bash
-pip install dist/arycal-*.whl
+pip install ../../dist/arycal-*.whl
 ```
 
 ## Requirements
@@ -75,7 +78,8 @@ pip install dist/arycal-*.whl
 
 - `python/arycal/` - Python wrapper module
 - `pyproject.toml` - Python package configuration
-- `crates/arycal-cli/` - Rust CLI implementation
+- `examples/` - Example Python usage scripts
+- `../arycal-cli/` - Rust CLI implementation
 
 ## How It Works
 

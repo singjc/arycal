@@ -64,7 +64,7 @@ import arycal
 exit_code = arycal.run_arycal(["config.json"])
 ```
 
-**Note:** Building from source requires Rust 1.84+ and maturin. See [python/README.md](python/README.md) for detailed instructions.
+**Note:** Building from source requires Rust 1.84+ and maturin. See [crates/arycal_pyo3/README.md](crates/arycal_pyo3/README.md) for detailed instructions.
 
 ### Precompiled Binaries
 
