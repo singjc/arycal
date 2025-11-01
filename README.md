@@ -41,6 +41,31 @@
 
 ## Installation
 
+### Python Package (pip)
+
+ARYCAL can be installed as a Python package, which includes the CLI binary:
+
+```bash
+pip install arycal
+```
+
+After installation, you can use arycal from the command line:
+
+```bash
+arycal config.json
+```
+
+Or call it programmatically from Python:
+
+```python
+import arycal
+
+# Run arycal with a config file
+exit_code = arycal.run_arycal(["config.json"])
+```
+
+**Note:** Building from source requires Rust 1.84+ and maturin. See [python/README.md](python/README.md) for detailed instructions.
+
 ### Precompiled Binaries
 
 [![Download CLI | macOS](https://img.shields.io/static/v1?label=Download%20CLI&message=macOS&color=blue)](https://github.com/singjc/arycal/releases/download/v0.2.0-alpha/arycal-v0.2.0-alpha-arycal-cli-macos.tar.gz)

@@ -10,3 +10,8 @@ heaptrack*
 *.data/
 /crates/arycal-viz
 /tests/
+.venv/
+dist/
+*.whl
+*.egg-info/
+__pycache__/
