@@ -1,0 +1,43 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "arycal"
+version = "0.2.0"
+description = "Across Run dYnamic Chromatogram ALignment - A Rust-based tool for aligning extracted ion chromatograms (EICs) across multiple runs"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [
+    { name = "Justin Sing", email = "justincsing@gmail.com" }
+]
+keywords = ["mass-spectrometry", "chromatogram", "alignment", "bioinformatics", "proteomics"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+[project.urls]
+Homepage = "https://github.com/singjc/arycal"
+Repository = "https://github.com/singjc/arycal"
+Documentation = "https://github.com/singjc/arycal"
+
+[tool.maturin]
+# The crate to build
+manifest-path = "../arycal-cli/Cargo.toml"
+# Python source directory
+python-source = "python"
+# Build the binary into the wheel
+bindings = "bin"
+# Strip the binary for smaller size
+strip = true
