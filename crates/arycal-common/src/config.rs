@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Deserializer, Serialize};
-use std::{collections::HashMap, path::PathBuf};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum XicFileType {
