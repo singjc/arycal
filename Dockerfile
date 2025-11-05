@@ -32,10 +32,10 @@ RUN --mount=type=cache,target=/app/target \
     cargo build --release --bin arycal && \
     strip target/release/arycal
 
-# Build arycal-gui and strip
-RUN --mount=type=cache,target=/app/target \
-    cargo build --release --bin arycal-gui && \
-    strip target/release/arycal-gui
+# # Build arycal-gui and strip
+# RUN --mount=type=cache,target=/app/target \
+#     cargo build --release --bin arycal-gui && \
+#     strip target/release/arycal-gui
 
 # ─── Stage 2: minimal runtime ───────────────────────────────────────────
 FROM debian:bullseye-slim
@@ -47,7 +47,7 @@ RUN apt-get update && \
 
 WORKDIR /app
 COPY --from=builder /app/target/release/arycal    /usr/local/bin/arycal
-COPY --from=builder /app/target/release/arycal-gui /usr/local/bin/arycal-gui
+# COPY --from=builder /app/target/release/arycal-gui /usr/local/bin/arycal-gui
 
 ENTRYPOINT ["arycal"]
 CMD ["--help"]
