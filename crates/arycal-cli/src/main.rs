@@ -1,3 +1,6 @@
+#![allow(unused_imports)]
+#![allow(dead_code)]
+
 use clap::{Arg, Command, ValueHint};
 use anyhow::Result;
 use arycal_cli::input::Input; 

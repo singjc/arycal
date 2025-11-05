@@ -1,3 +1,6 @@
+#![allow(unused_imports)]
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 
 use osw::PrecursorIdData;
