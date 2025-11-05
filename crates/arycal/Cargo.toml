@@ -28,3 +28,6 @@ dtw_rs = "0.9.5"
 
 # linfa = "0.7.1"
 # linfa-clustering = "0.7.1"
+
+[lints]
+workspace = true
