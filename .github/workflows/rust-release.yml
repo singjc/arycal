@@ -57,17 +57,6 @@ jobs:
               cargo build --release --target=x86_64-unknown-linux-gnu --features mpi
               cp target/x86_64-unknown-linux-gnu/release/arycal artifacts/arycal-cli
 
-          # GUI: glibc on Ubuntu 22.04
-          - name: arycal-gui-linux-gnu
-            bin: arycal-gui
-            target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
-            build: |
-              sudo apt-get update && sudo apt-get install -y \
-                libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libegl1-mesa libgtk-3-dev
-              cargo build --release --target=x86_64-unknown-linux-gnu
-              cp target/x86_64-unknown-linux-gnu/release/arycal-gui artifacts/arycal-gui
-
           # macOS + Windows
           - name: arycal-cli-macos
             bin: arycal
@@ -78,15 +67,6 @@ jobs:
               cargo build --release --target=x86_64-apple-darwin
               cp target/x86_64-apple-darwin/release/arycal artifacts/arycal-cli
 
-          - name: arycal-gui-macos
-            bin: arycal-gui
-            target: x86_64-apple-darwin
-            os: macos-latest
-            build: |
-              rustup target add x86_64-apple-darwin
-              cargo build --release --target=x86_64-apple-darwin
-              cp target/x86_64-apple-darwin/release/arycal-gui artifacts/arycal-gui
-
           - name: arycal-cli-windows
             bin: arycal
             target: x86_64-pc-windows-msvc
@@ -95,15 +75,6 @@ jobs:
               rustup target add x86_64-pc-windows-msvc
               cargo build --release --target=x86_64-pc-windows-msvc
               cp target/x86_64-pc-windows-msvc/release/arycal.exe artifacts/arycal-cli.exe
-
-          - name: arycal-gui-windows
-            bin: arycal-gui
-            target: x86_64-pc-windows-msvc
-            os: windows-latest
-            build: |
-              rustup target add x86_64-pc-windows-msvc
-              cargo build --release --target=x86_64-pc-windows-msvc
-              cp target/x86_64-pc-windows-msvc/release/arycal-gui.exe artifacts/arycal-gui.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -140,35 +111,4 @@ jobs:
           tar:     unix
           zip:     windows
           token:   ${{ secrets.GITHUB_TOKEN }}
-
-  # 3) Compat GUI build inside Ubuntu 18.04 & upload via GH CLI
-  upload_assets_compat:
-    name: Compat GUI Build (Ubuntu 18.04)
-    needs: create_release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build & package in Ubuntu 18.04
-        run: |
-          docker run --rm \
-            -v "$(pwd)":/work -w /work ubuntu:18.04 bash -lc "
-              apt-get update &&
-              apt-get install -y curl build-essential pkg-config libssl-dev \
-                                 libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
-                                 libegl1-mesa libgtk-3-dev &&
-              curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain 1.85.0 &&
-              source \$HOME/.cargo/env &&
-              rustup target add x86_64-unknown-linux-gnu &&
-              cargo build --release --target=x86_64-unknown-linux-gnu &&
-              tar -czf arycal-gui-${{ github.ref_name }}-compat.tar.gz \
-                -C target/x86_64-unknown-linux-gnu/release arycal-gui
-            "
-
-      - name: Upload Compat Binary via GH CLI
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "${{ github.ref_name }}" \
-            arycal-gui-${{ github.ref_name }}-compat.tar.gz
 

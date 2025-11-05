@@ -27,17 +27,6 @@
     - A set of decoy aligned peaks is generated (random shuffling of query peak or random region selection) to estimate the quality of peak alignment.
     - If using the IPF OpenSWATH workflow, alignment (based on detecting transitions) and scoring of individual transitions peak mappings is also supported.
   - Currently only supports output from OpenSWATH (OSW feature files and sqMass XIC files)
-- **Native desktop GUI** (`arycal-gui`) providing an end-to-end, tabbed workflow:
-  1. **PQP Generation** — build peptide query parameter assay libraries  
-  2. **OpenSWATH Workflow** — configure & launch OpenSWATH feature extraction and scoring
-  3. **ARYCAL Alignment** — run across-run dynamic alignment  
-  4. **Statistical Validation** — semi-supervised scoring with PyProphet for FDR estimation  
-  5. **Visualization** — interactive tabs for  
-     - Extracted ion chromatograms (EIC)  
-     - Peak boundary overlays  
-     - Linked‐axis and cursor across multiple runs  
-
-![ARYCAL GUI visualization tab](./assets/img/gui/visualization_tab.png)
 
 ## Installation
 
@@ -74,11 +63,6 @@ exit_code = arycal.run_arycal(["config.json"])
 [![Download CLI | Linux (musl‐static)](https://img.shields.io/static/v1?label=Download%20CLI&message=Linux%20%28musl-static%29&color=blue)](https://github.com/singjc/arycal/releases/download/v0.2.0-alpha/arycal-v0.2.0-alpha-arycal-cli-linux-musl-static.tar.gz)
 [![Download CLI | Linux (glibc + MPI)](https://img.shields.io/static/v1?label=Download%20CLI&message=Linux%20%28glibc+MPI%29&color=blue)](https://github.com/singjc/arycal/releases/download/v0.2.0-alpha/arycal-v0.2.0-alpha-arycal-cli-linux-gnu-mpi.tar.gz)
 
-[![Download GUI | macOS](https://img.shields.io/static/v1?label=Download%20GUI&message=macOS&color=brightgreen)](https://github.com/singjc/arycal/releases/download/v0.2.0-alpha/arycal-gui-v0.2.0-alpha-arycal-gui-macos.tar.gz)
-[![Download GUI | Windows](https://img.shields.io/static/v1?label=Download%20GUI&message=Windows&color=brightgreen)](https://github.com/singjc/arycal/releases/download/v0.2.0-alpha/arycal-gui-v0.2.0-alpha-arycal-gui-windows.zip)
-[![Download GUI | Linux (glibc)](https://img.shields.io/static/v1?label=Download%20GUI&message=Linux%20%28glibc%29&color=brightgreen)](https://github.com/singjc/arycal/releases/download/v0.2.0-alpha/arycal-gui-v0.2.0-alpha-arycal-gui-linux-gnu.tar.gz)
-[![Download GUI | Ubuntu 18.04 (compat)](https://img.shields.io/static/v1?label=Download%20GUI&message=Ubuntu%2018.04&color=orange)](https://github.com/singjc/arycal/releases/download/v0.2.0-alpha/arycal-gui-v0.2.0-alpha-compat.tar.gz)
-
 
 Precompiled binaries are available for Linux, MacOS, and Windows. You can download the latest release under the assets from the [releases page](https://github.com/singjc/arycal/releases)
 
@@ -101,14 +85,6 @@ If you're working on an HPC, you can add the `--features mpi` flag to enable MPI
 
 ```bash
 cargo build --features mpi --release --bin arycal
-```
-
-#### 2) GUI Application
-
-To build the GUI application, run the following command in the root directory of the repository:
-
-```bash
-cargo build --release --bin arycal-gui
 ```
 
 ### Docker

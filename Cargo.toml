@@ -4,7 +4,6 @@ members = [
     "crates/arycal/",
     "crates/arycal-cli/",
     "crates/arycal-cloudpath/", 
-    "crates/arycal-gui", 
 ]
 
 resolver = "2"
