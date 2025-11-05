@@ -38,6 +38,3 @@ jobs:
 
     - name: Build cli
       run: cargo build --verbose --release --bin arycal
-
-    - name: Build gui
-      run: cargo build --verbose --release --bin arycal-gui
