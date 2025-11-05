@@ -13,7 +13,3 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 debug = true
-
-[lints.rust]
-unused_imports = "allow"
-dead_code = "allow"
