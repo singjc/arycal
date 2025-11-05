@@ -402,7 +402,7 @@ impl ChromatogramReader for DuckDBParquetChromatogramReader {
                 row.get::<_, i32>(5)?,
             ))
         })?;
-        let elapsed_time = start_time.elapsed();
+        let _elapsed_time = start_time.elapsed();
         // println!("Query execution time: {:?}", elapsed_time);
 
         // 3. Parallel processing of chromatograms
@@ -411,11 +411,11 @@ impl ChromatogramReader for DuckDBParquetChromatogramReader {
         let mut precursor_groups = rows
             .par_iter()
             .filter_map(|row| {
-                let (precursor_id, native_id, rt_data, intensity_data, rt_comp, int_comp) = row;
+                let (_precursor_id, native_id, rt_data, intensity_data, rt_comp, int_comp) = row;
                 
                 native_id_to_precursor.get(native_id).map(|&pid| {
                     let (seq, charge) = &precursor_info[&pid];
-                    let group_id = format!("{}_{}", seq, charge);
+                    let _group_id = format!("{}_{}", seq, charge);
                     
                     match (
                         decompress_data(rt_data, *rt_comp),
@@ -465,7 +465,7 @@ impl ChromatogramReader for DuckDBParquetChromatogramReader {
                     a
                 }
             );
-        let elapsed_time = start_time.elapsed();
+        let _elapsed_time = start_time.elapsed();
         // println!("Parallel chromatogram decompressing processing time: {:?}", elapsed_time);
 
         // 4. Optimized metadata handling
