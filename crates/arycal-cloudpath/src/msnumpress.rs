@@ -1,26 +1,9 @@
 
 
-fn is_little_endian() -> bool {
-    let one: i32 = 1;
-    let little_endian: &[u8] = unsafe { std::slice::from_raw_parts((&one as *const i32) as *const u8, std::mem::size_of::<i32>()) };
-    little_endian[0] == 1
-}
-
-static mut IS_LITTLE_ENDIAN: Option<bool> = None;
-
 fn get_is_little_endian() -> bool {
-    unsafe {
-        if IS_LITTLE_ENDIAN.is_none() {
-            IS_LITTLE_ENDIAN = Some(is_little_endian());
-        }
-        IS_LITTLE_ENDIAN.unwrap()
-    }
+    cfg!(target_endian = "little")
 }
 
-
-fn encode_fixed_point(fixed_point: f64, result: &mut [u8]) {
-   unimplemented!("Encoding fixed point is not yet implemented.")
-}
 
 
 pub fn decode_fixed_point(data: &[u8]) -> f64 {
@@ -43,10 +26,6 @@ pub fn decode_fixed_point(data: &[u8]) -> f64 {
 }
 
 
-
-fn encode_int(x: u32, res: &mut Vec<u8>) -> usize {
-    unimplemented!("Encoding integers is not yet implemented.")
-}
 
 
 /// Decodes an int from the half bytes in bp. Lossless reverse of encodeInt 
@@ -72,10 +51,10 @@ pub fn decode_int(
     half: &mut usize,
     res: &mut u32,
 ) -> Result<(), String> {
-    let mut n: usize;
-    let mut mask: u32;
+    let n: usize;
+    let mask: u32;
     let mut m: u32;
-    let mut head: u8;
+    let head: u8;
     let mut hb: u8;
 
     // Extract the first half byte, specifying the number of leading zero half bytes of the final integer.
@@ -127,14 +106,13 @@ pub fn decode_int(
 
 // Linear
 
-pub fn _encode_linear(data: &[f64], result: &mut Vec<u8>, fixed_point: f64) -> Result<usize, String> {
+pub fn _encode_linear(_data: &[f64], _result: &mut Vec<u8>, _fixed_point: f64) -> Result<usize, String> {
     unimplemented!("Encoding linear data is not yet implemented.")
 }
 
 
 
 pub fn _decode_linear(data: &[u8], data_size: usize, result: &mut [f64]) -> Result<usize, String> {
-    let mut ri = 0;
     let mut init: u8;
     let mut buff: u32 = 0;
     let mut diff: i32;
@@ -184,6 +162,7 @@ pub fn _decode_linear(data: &[u8], data_size: usize, result: &mut [f64]) -> Resu
     
     result[1] = ints[2] as f64 / fixed_point;
 
+    let mut ri: usize;
     half = 0;
     ri = 2; // Start filling result from index 2
     di = 16; // Start reading from index 16

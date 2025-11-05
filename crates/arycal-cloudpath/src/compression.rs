@@ -39,17 +39,17 @@ pub fn compress_data(data: &[f64], compression_type: i32) -> Vec<u8> {
     }
 }
 
-fn encode_numpress_linear(data: &[f64]) -> Vec<u8> {
+fn encode_numpress_linear(_data: &[f64]) -> Vec<u8> {
     // Placeholder implementation for Numpress Linear encoding
     Vec::new() // Replace with actual encoding logic
 }
 
-fn encode_numpress_slof(data: &[f64]) -> Vec<u8> {
+fn encode_numpress_slof(_data: &[f64]) -> Vec<u8> {
     // Placeholder implementation for Numpress Slof encoding
     Vec::new() // Replace with actual encoding logic
 }
 
-fn encode_numpress_pic(data: &[f64]) -> Vec<u8> {
+fn encode_numpress_pic(_data: &[f64]) -> Vec<u8> {
     // Placeholder implementation for Numpress Pic encoding
     Vec::new() // Replace with actual encoding logic
 }

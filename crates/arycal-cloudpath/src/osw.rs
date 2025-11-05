@@ -72,7 +72,7 @@ impl<T: Default> ValueEntryType<T> {
     // Method to push a value into the Multiple variant
     pub fn push(&mut self, value: T) {
         match self {
-            ValueEntryType::Single(single_value) => {
+            ValueEntryType::Single(_single_value) => {
                 // Convert Single to Multiple
                 let old_value = std::mem::take(self); // Take the current value
                 *self = ValueEntryType::Multiple(vec![old_value.into_single().unwrap(), value]);
@@ -302,7 +302,6 @@ impl PrecursorIdData {
 #[derive(Clone)]
 pub struct OswAccess {
     pool: Pool<SqliteConnectionManager>,
-    run_table: HashMap<i64, String>,  // RUN_ID -> basename
     filename_to_id: HashMap<String, i64>,  // basename -> RUN_ID
 }
 
@@ -322,18 +321,17 @@ impl OswAccess {
         Self::ensure_indexes(&pool)?;
 
         // Initialize run tables if requested
-        let (run_table, filename_to_id) = if init_run_table {
+        let filename_to_id = if init_run_table {
             Self::load_run_table(&pool).unwrap_or_else(|e| {
                 log::warn!("Failed to load RUN table: {}. Using empty tables.", e);
-                (HashMap::new(), HashMap::new())
+                HashMap::new()
             })
         } else {
-            (HashMap::new(), HashMap::new())
+            HashMap::new()
         };
 
         Ok(OswAccess {
             pool,
-            run_table,
             filename_to_id,
         })
     }
@@ -377,14 +375,13 @@ impl OswAccess {
     }
 
     /// Loads the RUN table into memory
-    fn load_run_table(pool: &Pool<SqliteConnectionManager>) -> Result<(HashMap<i64, String>, HashMap<String, i64>), OpenSwathSqliteError> {
+    fn load_run_table(pool: &Pool<SqliteConnectionManager>) -> Result<HashMap<String, i64>, OpenSwathSqliteError> {
         let conn = pool.get()
             .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
 
         let query = "SELECT ID, FILENAME FROM RUN";
         let mut stmt = conn.prepare(query)?;
 
-        let mut run_table = HashMap::new();
         let mut filename_to_id = HashMap::new();
 
         let rows = stmt.query_map([], |row| {
@@ -406,13 +403,12 @@ impl OswAccess {
                 basename
             };
 
-            run_table.insert(id, basename.clone());
             filename_to_id.insert(basename, id);
         }
 
-        log::trace!("Loaded RUN table with {} entries", run_table.len());
+        log::trace!("Loaded RUN table with {} entries", filename_to_id.len());
 
-        Ok((run_table, filename_to_id))
+        Ok(filename_to_id)
     }
 
     /// Get RUN_IDs for given basenames
