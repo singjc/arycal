@@ -1088,10 +1088,9 @@ impl Runner {
         // Collect all transition alignment results
         let mut all_transition_alignments = Vec::new();
         for alignment_result in results.values() {
-            if let transition_scores = &alignment_result.identifying_peak_mapping_scores {
-                for run_scores in transition_scores.values() {
-                    all_transition_alignments.extend(run_scores.iter().cloned());
-                }
+            let transition_scores = &alignment_result.identifying_peak_mapping_scores;
+            for run_scores in transition_scores.values() {
+                all_transition_alignments.extend(run_scores.iter().cloned());
             }
         }
     
