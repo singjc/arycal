@@ -264,7 +264,7 @@ impl Runner {
     
         log::info!("Starting alignment for {} precursors", total_count);
     
-        let separate_output_accessor: Option<FeatureAccessor>;
+        let _separate_output_accessor: Option<FeatureAccessor>;
         let feature_access: &[FeatureAccessor] = if let Some(scores_output_file) = &self.parameters.alignment.scores_output_file {
             let scores_output_file = scores_output_file.clone();
             // Check file extension to determine type
@@ -277,10 +277,9 @@ impl Runner {
                 let osw_access = OswAccess::new(&scores_output_file, false)?;
                 FeatureAccessor::Osw(osw_access)
             };
-            separate_output_accessor = Some(accessor);
-            std::slice::from_ref(separate_output_accessor.as_ref().unwrap())
+            _separate_output_accessor = Some(accessor);
+            std::slice::from_ref(_separate_output_accessor.as_ref().unwrap())
         } else {
-            separate_output_accessor = None;
             &self.feature_access
         };
 
