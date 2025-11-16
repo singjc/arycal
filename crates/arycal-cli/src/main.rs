@@ -59,8 +59,8 @@ fn generate_config_template(path: &str) -> Result<()> {
 #     * sgolay_window: Window size (must be odd, typically 11)
 #     * sgolay_order: Polynomial order (typically 3)
 #   - rt_mapping_tolerance: Retention time tolerance in seconds for peak mapping (10.0 recommended)
-#   - decoy_peak_mapping_method: "shuffle" or "random_region"
-#   - decoy_window_size: Window size for random_region method
+#   - decoy_peak_mapping_method: "shuffle" or "random_regions"
+#   - decoy_window_size: Window size for random_regions method
 #   - compute_scores: Calculate alignment scores (true recommended)
 #   - scores_output_file: Write scores to separate file (null = write to input file)
 #   - retain_alignment_path: Keep alignment path data (needed for identifying transitions)

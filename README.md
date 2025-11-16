@@ -237,7 +237,7 @@ For PyProphet split parquet format (faster, parallelized):
 - `reference_type`: "star" (single reference) or "mst" (minimum spanning tree)
 - `reference_run`: Specific reference run name (null = auto-select)
 - `rt_mapping_tolerance`: RT tolerance in seconds (10.0 recommended)
-- `decoy_peak_mapping_method`: "shuffle" or "random_region"
+- `decoy_peak_mapping_method`: "shuffle" or "random_regions"
 - `compute_scores`: Calculate alignment scores (true recommended)
 
 </details>

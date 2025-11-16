@@ -162,10 +162,10 @@ pub struct AlignmentConfig {
     pub smoothing: SmoothingConfig,
     /// Retention time mapping tolerance in seconds for mapping aligned query peak to reference peak.
     pub rt_mapping_tolerance: Option<f64>,
-    /// Method to use for mapping decoy peaks. Current options are "shuffle" and "random_region".
+    /// Method to use for mapping decoy peaks. Current options are "shuffle" and "random_regions".
     #[serde(rename = "decoy_peak_mapping_method")]
     pub decoy_peak_mapping_method: String,
-    /// Size of the window to use for the decoy peak mapping. Only used when the method is "random_region".
+    /// Size of the window to use for the decoy peak mapping. Only used when the method is "random_regions".
     pub decoy_window_size: Option<usize>,
     /// Optionally compute alignment scores for the full trace alignment and peak mapping. Default is true.
     pub compute_scores: Option<bool>,
