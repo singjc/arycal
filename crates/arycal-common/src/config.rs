@@ -112,7 +112,14 @@ impl FeaturesConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FiltersConfig {
-    pub decoy: bool,
+    /// When false, excludes decoy precursors from alignment (only processes targets).
+    /// When true, includes both target and decoy precursors in alignment.
+    /// 
+    /// Old field name was "decoy" with inverted semantics:
+    /// - Old "decoy": true meant exclude decoys → New "include_decoys": false
+    /// - Old "decoy": false meant include decoys → New "include_decoys": true
+    #[serde(alias = "decoy")] // Support old config files, but they'll be interpreted with new semantics!
+    pub include_decoys: bool,
     pub include_identifying_transitions: Option<bool>,
     pub max_score_ms2_qvalue: Option<f64>,
     /// TSV file containing the list of precursors to filter for.
@@ -122,7 +129,7 @@ pub struct FiltersConfig {
 impl Default for FiltersConfig {
     fn default() -> Self {
         FiltersConfig {
-            decoy: true,
+            include_decoys: false, // By default, exclude decoys (only align targets)
             include_identifying_transitions: Some(false),
             max_score_ms2_qvalue: Some(1.0),
             precursor_ids: None,

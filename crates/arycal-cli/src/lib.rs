@@ -190,8 +190,13 @@ impl Runner {
             precursor_ids = Some(load_precursor_ids_from_tsv(precursor_ids_file)?);
         }
 
+        // filter_decoys parameter in fetch_transition_ids: when true, EXCLUDES decoys (only processes targets)
+        // include_decoys config field: when true, INCLUDES decoys (processes both targets and decoys)
+        // So: filter_decoys = !include_decoys
+        let filter_decoys = !parameters.filters.include_decoys;
+        
         let precursor_map: Vec<PrecursorIdData> = feature_accessor.fetch_transition_ids(
-            parameters.filters.decoy, 
+            filter_decoys, 
             parameters.filters.include_identifying_transitions.unwrap_or_default(), 
             precursor_ids
         )?;

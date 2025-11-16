@@ -133,6 +133,28 @@ impl OswpqAccess {
         })
     }
 
+    /// Convert PeakMapping to AlignmentFeature for PyProphet format
+    fn peak_mapping_to_alignment_feature(pm: &PeakMapping) -> AlignmentFeature {
+        AlignmentFeature {
+            alignment_id: pm.alignment_id,
+            run_id: pm.run_id,
+            precursor_id: pm.precursor_id as i64,
+            feature_id: pm.aligned_feature_id,
+            reference_feature_id: pm.reference_feature_id,
+            aligned_rt: pm.aligned_rt,
+            reference_rt: pm.reference_rt,
+            var_xcorr_coelution_to_reference: pm.xcorr_coelution_to_ref,
+            var_xcorr_shape_to_reference: pm.xcorr_shape_to_ref,
+            var_mi_to_reference: pm.mi_to_ref,
+            var_xcorr_coelution_to_all: pm.xcorr_coelution_to_all,
+            var_xcorr_shape: pm.xcorr_shape_to_all,
+            var_mi_to_all: pm.mi_to_all,
+            var_retention_time_deviation: pm.rt_deviation,
+            var_peak_intensity_ratio: pm.intensity_ratio,
+            decoy: pm.label as i64,
+        }
+    }
+
     /// Create a DuckDB connection for querying
     fn create_connection(&self) -> Result<Connection, OpenSwathParquetError> {
         Connection::open_in_memory()
@@ -635,6 +657,7 @@ impl OswpqAccess {
     }
 
     /// Write MS2 alignment batch to parquet file
+    /// This writes in PyProphet's expected format (feature_alignment.parquet)
     pub fn write_ms2_alignment_batch(
         &self,
         peak_mappings: &[PeakMapping],
@@ -643,7 +666,34 @@ impl OswpqAccess {
             return Ok(());
         }
 
-        let output_path = self.base_path.join("feature_ms2_alignment.parquet");
+        // Convert PeakMapping to AlignmentFeature format
+        let alignment_features: Vec<AlignmentFeature> = peak_mappings
+            .iter()
+            .map(Self::peak_mapping_to_alignment_feature)
+            .collect();
+
+        // Write using PyProphet format
+        self.write_alignment_features(&alignment_features)?;
+
+        // Optionally write the detailed format with additional fields
+        // Uncomment if you want both formats:
+        // self.write_ms2_alignment_detailed(peak_mappings)?;
+
+        Ok(())
+    }
+
+    /// Write MS2 alignment batch to parquet file (detailed format with all PeakMapping fields)
+    /// This is an optional extra output format that includes additional fields not in PyProphet format
+    #[allow(dead_code)]
+    pub fn write_ms2_alignment_detailed(
+        &self,
+        peak_mappings: &[PeakMapping],
+    ) -> Result<(), OpenSwathParquetError> {
+        if peak_mappings.is_empty() {
+            return Ok(());
+        }
+
+        let output_path = self.base_path.join("feature_ms2_alignment_detailed.parquet");
         let conn = self.create_connection()?;
 
         // Create temporary table
