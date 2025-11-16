@@ -154,7 +154,7 @@ impl OswpqAccess {
 
         let timestamp = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
+            .map_err(|e| OpenSwathParquetError::IoError(format!("System time error: {}", e)))?
             .as_secs();
 
         for filename in &output_files {
