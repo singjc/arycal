@@ -28,23 +28,22 @@ jobs:
     strategy:
       matrix:
         include:
-          # CLI: dynamic musl via musl-gcc
-          - name: arycal-cli-linux-musl
+          # CLI: Linux glibc (most compatible)
+          - name: arycal-cli-linux-gnu
             bin: arycal
             os: ubuntu-latest
             build: |
-              sudo apt-get update && sudo apt-get install -y musl-tools
-              CC=musl-gcc cargo build --release
+              cargo build --release
               cp target/release/arycal artifacts/arycal-cli
 
-          # CLI: fully static musl via musl-tools
+          # CLI: fully static musl via cross (with Rust 1.85.0 in container)
           - name: arycal-cli-linux-musl-static
             bin: arycal
             target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             build: |
-              sudo apt-get update && sudo apt-get install -y musl-tools
-              cargo build --release --target=x86_64-unknown-linux-musl
+              cargo install cross --git https://github.com/cross-rs/cross
+              CROSS_CONTAINER_ENGINE=docker cross build --release --target=x86_64-unknown-linux-musl
               cp target/x86_64-unknown-linux-musl/release/arycal artifacts/arycal-cli
 
           # CLI: glibc + MPI
@@ -96,10 +95,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.0
-
-      - name: Add musl target
-        if: contains(matrix.name, 'musl')
-        run: rustup target add x86_64-unknown-linux-musl
 
       - name: Build
         run: bash -lc "${{ matrix.build }}"
