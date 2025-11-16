@@ -21,12 +21,17 @@
 - **Standalone command-line** (`arycal`) executable for:
   - Fast and efficient chromatogram alignment
     - Supports dynamic time warping (DTW), fast Fourier transform (FFT), and a combination of FFT refined by DTW alignment methods
+    - Parallelized with Rayon for optimal performance
   - Scoring quality of alignment
     - Full trace alignment is scored based on cross-correlation coelution score, peak shape similarity and mutual information.
     - Individual peak mapping across runs is scored using the same metrics.
     - A set of decoy aligned peaks is generated (random shuffling of query peak or random region selection) to estimate the quality of peak alignment.
     - If using the IPF OpenSWATH workflow, alignment (based on detecting transitions) and scoring of individual transitions peak mappings is also supported.
-  - Currently only supports output from OpenSWATH (OSW feature files and sqMass XIC files)
+  - Multiple input format support:
+    - **PyProphet split parquet format** (`.oswpqd` directories) - fully parallelized reader
+    - **OSW SQLite format** (`.osw` files)
+    - **sqMass XIC files** and **Parquet XIC files**
+  - Automatic configuration template generation for easy setup
 
 ## Installation
 
@@ -99,79 +104,141 @@ docker pull ghcr.io/singjc/arycal:master
 
 ## Usage
 
-ARYCAL is a command-line tool that uses a json configuration file to specify parameters for the tool. 
+ARYCAL is a command-line tool that uses a json configuration file to specify parameters for the tool.
+
+### Quick Start
+
+If you run ARYCAL without any arguments, it will automatically generate a template configuration file:
 
 ```bash
-# Run ARYCAL 
-arycal arycal_config.json
+# Generate a template configuration file
+arycal
+
+# This creates: arycal_config_template.json
+# Edit the template with your file paths and settings, then run:
+arycal arycal_config_template.json
+```
+
+### Basic Usage
+
+```bash
+# Run ARYCAL with a configuration file
+arycal config.json
+
+# Optionally specify number of threads
+arycal config.json -t 8
 ```
 
 <details>
-<summary> <b>Example Config</b> </summary>
+<summary> <b>Example Configuration</b> </summary>
 
-Remove the comments before running the configuration file.
+### Basic OSW Format (SQLite)
 
 ```json
 {
   "xic": {
-    # Use the precursor chromatogram in the alignment
     "include-precursor": true,
-    # Number of precursor isotopes to use
     "num-isotopes": 3,
-    # The extraction ion chroamtogram input file type (Currently only sqMass is supported)
     "file-type": "sqMass",
-    # The file paths to the XIC files
     "file-paths": [
-      "data/xics/hroest_K120808_Strep0%PlasmaBiolRepl1_R01_SW.sqMass",
-      "data/xics/hroest_K120808_Strep0%PlasmaBiolRepl1_R02_SW.sqMass",
-      "data/xics/hroest_K120808_Strep0%PlasmaBiolRepl1_R03_SW.sqMass"
+      "data/xics/run1.sqMass",
+      "data/xics/run2.sqMass",
+      "data/xics/run3.sqMass"
     ]
   },
   "features": {
-    # The feature file type (Currently only OSW is supported)
     "file-type": "osw",
-    # The file paths to the feature files (Currently only one file is supported, assumming it's a merged OSW file of all runs)
     "file-paths": [
       "data/merged.osw"
     ]
   },
   "filters": {
-    # Whether to include decoy precursor XICs to align as well (false means decoys are included)
-    "decoy": false,
-    # Whether to align and score identifying transitions
+    "include_decoys": false,
     "include_identifying_transitions": false,
-    # A TSV file (with header) to filter for precursor ids to align
-    "precursor_ids": null,
+    "max_score_ms2_qvalue": 1.0,
+    "precursor_ids": null
   },
   "alignment": {
-    # The batch size for aligning N precursors for a given thread
-    "batch_size": 1000,
-    # The alignment method to use (Currently supports DTW, FFT, and FFTDTW)
-    "method": "FFT",
-    # The type of reference to use (Currently supports star, mst, progressive)
+    "batch_size": 10000,
+    "method": "FFTDTW",
     "reference_type": "star",
-    # Specifies the reference run to use (otherwise a random run is selected each time). Only used if reference_type is set to "star"
     "reference_run": null,
-    # Whether to use the total ion chromatogram (TIC) for alignment. (Currently only supports true, as the alignment path is usually monotonic for the MS2 transitions)
     "use_tic": true,
-    # Smoothing parameters for the chromatogram (Currently only supports Savitsky-golay smoothing)
     "smoothing": {
       "sgolay_window": 11,
       "sgolay_order": 3
     },
-    # The tolearance for mapping query peaks to the reference run using the alignment result
-    "rt_mapping_tolerance": 20.0,
-    # The method for generating decoy aligned peaks. (Currently supports shuffle, random_regions)
+    "rt_mapping_tolerance": 10.0,
     "decoy_peak_mapping_method": "shuffle",
-    # Size of the window to use for the decoy peak mapping. Only used when the method is random_region.
     "decoy_window_size": 30,
-    # Compute the scores for the alignment
     "compute_scores": true,
-    # Optionally write out the scores to a separate file (sqlite), otherwise the scores are written to the feature input file
-    "scores_output_file": null
+    "scores_output_file": null,
+    "retain_alignment_path": false
+  },
+  "threads": 8,
+  "log_level": "info"
+}
+```
+
+### PyProphet Parquet Format (OSWPQ)
+
+For PyProphet split parquet format (faster, parallelized):
+
+```json
+{
+  "xic": {
+    "include-precursor": true,
+    "num-isotopes": 3,
+    "file-type": "parquet",
+    "file-paths": [
+      "data/xics/run1.parquet",
+      "data/xics/run2.parquet"
+    ]
+  },
+  "features": {
+    "file-type": "oswpq",
+    "file-paths": [
+      "data/merged_runs.oswpqd"
+    ]
+  },
+  "filters": {
+    "include_decoys": false,
+    "max_score_ms2_qvalue": 0.01
+  },
+  "alignment": {
+    "batch_size": 10000,
+    "method": "FFTDTW",
+    "reference_type": "star"
   }
 }
 ```
+
+### Configuration Fields
+
+**XIC Section:**
+- `include-precursor`: Include precursor chromatograms (true/false)
+- `num-isotopes`: Number of isotopic peaks (typically 3)
+- `file-type`: "sqMass" or "parquet"
+- `file-paths`: List of XIC file paths
+
+**Features Section:**
+- `file-type`: "osw" (SQLite) or "oswpq" (PyProphet split parquet)
+- `file-paths`: Path(s) to feature files
+
+**Filters Section:**
+- `include_decoys`: false = targets only, true = targets + decoys
+- `include_identifying_transitions`: Include non-quantifying transitions
+- `max_score_ms2_qvalue`: Q-value threshold (1.0 = no filtering)
+- `precursor_ids`: Optional TSV file with specific precursor IDs
+
+**Alignment Section:**
+- `batch_size`: Precursors to process per batch (10000 recommended)
+- `method`: "FFT", "DTW", or "FFTDTW" (FFTDTW recommended)
+- `reference_type`: "star" (single reference) or "mst" (minimum spanning tree)
+- `reference_run`: Specific reference run name (null = auto-select)
+- `rt_mapping_tolerance`: RT tolerance in seconds (10.0 recommended)
+- `decoy_peak_mapping_method`: "shuffle" or "random_region"
+- `compute_scores`: Calculate alignment scores (true recommended)
 
 </details>
 

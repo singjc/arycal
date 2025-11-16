@@ -129,9 +129,52 @@ impl OswpqAccess {
             ));
         }
 
-        Ok(Self {
+        let instance = Self {
             base_path,
-        })
+        };
+
+        // Backup any existing output files from previous runs
+        instance.backup_existing_output_files()?;
+
+        Ok(instance)
+    }
+
+    /// Backup existing output files from previous runs
+    /// 
+    /// This prevents appending new results to old results from a different run.
+    /// Only appends should happen within the same running instance of arycal.
+    fn backup_existing_output_files(&self) -> Result<(), OpenSwathParquetError> {
+        use std::time::SystemTime;
+        
+        let output_files = [
+            "feature_alignment.parquet",
+            "feature_ms2_alignment.parquet",
+            "feature_transition_alignment.parquet",
+        ];
+
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        for filename in &output_files {
+            let file_path = self.base_path.join(filename);
+            
+            if file_path.exists() {
+                let backup_path = self.base_path.join(format!("{}.old.{}", filename, timestamp));
+                
+                std::fs::rename(&file_path, &backup_path)
+                    .map_err(|e| OpenSwathParquetError::IoError(e.to_string()))?;
+                
+                log::info!(
+                    "Backed up existing {} to {}",
+                    filename,
+                    backup_path.display()
+                );
+            }
+        }
+
+        Ok(())
     }
 
     /// Convert PeakMapping to AlignmentFeature for PyProphet format

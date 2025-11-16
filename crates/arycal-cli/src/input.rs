@@ -3,9 +3,9 @@ use clap::ArgMatches;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use arycal_common::config::{AlignmentConfig, FeaturesConfig, FeaturesFileType, FiltersConfig, OpenSwathConfig, PQPConfig, PyProphetConfig, VisualizationConfig, XicConfig, XicFileType};
+use arycal_common::config::{AlignmentConfig, FeaturesConfig, FeaturesFileType, FiltersConfig, XicConfig, XicFileType};
 
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,43 +16,19 @@ pub struct Input {
     pub filters: FiltersConfig,
     pub alignment: AlignmentConfig,
     
-    /// GUI only releated fields
-    pub n_concurrent_processes: usize,
-    pub python_path: Option<String>, // Path to Python executable
-    pub last_python_dir: Option<String>,
-
-
     pub threads: usize,
     pub log_level: String,
-    pub arycal_binary_path: Option<PathBuf>,
-    pub pqp: Option<PQPConfig>,
-    pub openswath: Option<OpenSwathConfig>,
-    pub statistical_validation: Option<PyProphetConfig>,
-    pub visualization: Option<VisualizationConfig>, 
 }
 
 impl Default for Input {
     fn default() -> Self {
         Input {
-            // these will just use their own Defaults:
             xic: XicConfig::default(),
             features: FeaturesConfig::default(),
             filters: FiltersConfig::default(),
             alignment: AlignmentConfig::default(),
-
-            // your GUI defaults:
-            n_concurrent_processes: 1,
-            python_path: None,
-            last_python_dir: None,
             threads: std::thread::available_parallelism().unwrap().get().saturating_sub(1).max(1),
             log_level: "info".to_string(),
-
-            // rest can be None or whatever makes sense
-            arycal_binary_path: None,
-            pqp: None,
-            openswath: None,
-            statistical_validation: None,
-            visualization: None,
         }
     }
 }
