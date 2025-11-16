@@ -95,6 +95,8 @@ impl Input {
             let first_file = &self.xic.file_paths[0];
             if first_file.ends_with(".sqMass") {
                 self.xic.file_type = Some(XicFileType::SqMass);
+            } else if first_file.ends_with(".parquet") {
+                self.xic.file_type = Some(XicFileType::Parquet);
             } else {
                 self.xic.file_type = Some(XicFileType::Unknown);
             }
@@ -104,6 +106,8 @@ impl Input {
             let first_file = &self.features.file_paths[0];
             if first_file.ends_with(".osw") {
                 self.features.file_type = Some(FeaturesFileType::OSW);
+            } else if first_file.ends_with(".oswpqd") || first_file.ends_with(".oswpq") {
+                self.features.file_type = Some(FeaturesFileType::OSWPQ);
             } else {
                 self.features.file_type = Some(FeaturesFileType::Unknown);
             }
