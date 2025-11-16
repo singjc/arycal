@@ -526,7 +526,7 @@ dependencies = [
 
 [[package]]
 name = "arycal-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "arrow 54.3.1",
@@ -549,7 +549,7 @@ dependencies = [
 
 [[package]]
 name = "arycal-cloudpath"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "arycal-common",
@@ -571,7 +571,7 @@ dependencies = [
 
 [[package]]
 name = "arycal-common"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "deepsize",
@@ -583,7 +583,7 @@ dependencies = [
 
 [[package]]
 name = "arycal-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "arycal-cloudpath",
