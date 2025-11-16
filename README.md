@@ -11,6 +11,7 @@
 # ARYCAL: Across Run dYnamic Chromatogram ALignment
 
 [![Build Status](https://github.com/singjc/arycal/actions/workflows/rust.yml/badge.svg)](https://github.com/singjc/arycal/actions/workflows/rust.yml)
+[![PyPI - Version](https://img.shields.io/pypi/v/arycal?link=https%3A%2F%2Fpypi.org%2Fproject%2Farycal%2F)](https://pypi.org/project/arycal/)
 
 
 ## Overview
