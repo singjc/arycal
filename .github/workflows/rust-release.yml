@@ -103,6 +103,7 @@ jobs:
         run: bash -lc "${{ matrix.build }}"
 
       - name: Upload Binaries
+        if: startsWith(github.ref, 'refs/tags/')
         uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin:     ${{ matrix.bin }}
@@ -112,4 +113,11 @@ jobs:
           tar:     unix
           zip:     windows
           token:   ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Artifacts (manual run)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: artifacts/*
 
