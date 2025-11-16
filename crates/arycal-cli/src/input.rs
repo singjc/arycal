@@ -142,17 +142,17 @@ impl Input {
         if self.xic.file_type != Some(XicFileType::SqMass) && self.xic.file_type != Some(XicFileType::Parquet) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "Invalid xic type; expected 'sqMass'",
+                "Invalid xic type; expected 'sqMass' or 'parquet'",
             )
             .into());
         }
 
         // Validate features type
-        if self.features.file_type != Some(FeaturesFileType::OSW) {
+        if self.features.file_type != Some(FeaturesFileType::OSW) && self.features.file_type != Some(FeaturesFileType::OSWPQ) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
-                    "Invalid features type {:?}; expected 'osw'",
+                    "Invalid features type {:?}; expected 'osw' or 'oswpqd'",
                     self.features.file_type
                 ),
             )

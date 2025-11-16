@@ -42,6 +42,7 @@ impl XicFileType {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum FeaturesFileType {
     OSW,
+    OSWPQ,
     Unknown,
 }
 
@@ -59,6 +60,7 @@ impl<'de> Deserialize<'de> for FeaturesFileType {
         let s = String::deserialize(deserializer)?;
         match s.to_lowercase().as_str() {
             "osw" => Ok(FeaturesFileType::OSW),
+            "oswpq" | "parquet" => Ok(FeaturesFileType::OSWPQ),
             _ => Ok(FeaturesFileType::Unknown),
         }
     }
@@ -68,6 +70,7 @@ impl FeaturesFileType {
     pub fn as_str(&self) -> &str {
         match self {
             FeaturesFileType::OSW => "osw",
+            FeaturesFileType::OSWPQ => "oswpq",
             FeaturesFileType::Unknown => "Unknown",
         }
     }
