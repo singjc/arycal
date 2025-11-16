@@ -1,5 +1,7 @@
 # ARYCAL Python Package
 
+[![PyPI - Version](https://img.shields.io/pypi/v/arycal?link=https%3A%2F%2Fpypi.org%2Fproject%2Farycal%2F)](https://pypi.org/project/arycal/)
+
 This crate contains the Python packaging for arycal, allowing you to install and use the arycal CLI from Python.
 
 ## Installation
