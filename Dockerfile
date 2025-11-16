@@ -27,15 +27,11 @@ COPY . .
 
 # ─── Build & strip optimized release binaries ───────────────────────────
 
-# Build arycal and immediately strip symbols
+# Build arycal, copy it out of the cached mount, then strip
 RUN --mount=type=cache,target=/app/target \
     cargo build --release --bin arycal && \
-    strip target/release/arycal
-
-# # Build arycal-gui and strip
-# RUN --mount=type=cache,target=/app/target \
-#     cargo build --release --bin arycal-gui && \
-#     strip target/release/arycal-gui
+    cp /app/target/release/arycal /app/arycal && \
+    strip /app/arycal
 
 # ─── Stage 2: minimal runtime ───────────────────────────────────────────
 FROM debian:bullseye-slim
@@ -46,8 +42,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY --from=builder /app/target/release/arycal    /usr/local/bin/arycal
-# COPY --from=builder /app/target/release/arycal-gui /usr/local/bin/arycal-gui
+COPY --from=builder /app/arycal    /usr/local/bin/arycal
 
 ENTRYPOINT ["arycal"]
 CMD ["--help"]
