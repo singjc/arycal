@@ -165,15 +165,29 @@ impl OswpqAccess {
 
     /// Get the path to a specific run's precursors_features.parquet file
     pub fn get_precursors_features_path(&self, run_name: &str) -> PathBuf {
+        // Handle both cases: with or without .oswpq extension
+        let dir_name = if run_name.ends_with(".oswpq") {
+            run_name.to_string()
+        } else {
+            format!("{}.oswpq", run_name)
+        };
+        
         self.base_path
-            .join(run_name)
+            .join(dir_name)
             .join("precursors_features.parquet")
     }
 
     /// Get the path to a specific run's transition_features.parquet file
     pub fn get_transition_features_path(&self, run_name: &str) -> PathBuf {
+        // Handle both cases: with or without .oswpq extension
+        let dir_name = if run_name.ends_with(".oswpq") {
+            run_name.to_string()
+        } else {
+            format!("{}.oswpq", run_name)
+        };
+        
         self.base_path
-            .join(run_name)
+            .join(dir_name)
             .join("transition_features.parquet")
     }
 
