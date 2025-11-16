@@ -42,6 +42,7 @@ impl XicFileType {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum FeaturesFileType {
     OSW,
+    OSWPQ,
     Unknown,
 }
 
@@ -59,6 +60,7 @@ impl<'de> Deserialize<'de> for FeaturesFileType {
         let s = String::deserialize(deserializer)?;
         match s.to_lowercase().as_str() {
             "osw" => Ok(FeaturesFileType::OSW),
+            "oswpq" | "parquet" => Ok(FeaturesFileType::OSWPQ),
             _ => Ok(FeaturesFileType::Unknown),
         }
     }
@@ -68,6 +70,7 @@ impl FeaturesFileType {
     pub fn as_str(&self) -> &str {
         match self {
             FeaturesFileType::OSW => "osw",
+            FeaturesFileType::OSWPQ => "oswpq",
             FeaturesFileType::Unknown => "Unknown",
         }
     }
@@ -109,7 +112,14 @@ impl FeaturesConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FiltersConfig {
-    pub decoy: bool,
+    /// When false, excludes decoy precursors from alignment (only processes targets).
+    /// When true, includes both target and decoy precursors in alignment.
+    /// 
+    /// Old field name was "decoy" with inverted semantics:
+    /// - Old "decoy": true meant exclude decoys → New "include_decoys": false
+    /// - Old "decoy": false meant include decoys → New "include_decoys": true
+    #[serde(alias = "decoy")] // Support old config files, but they'll be interpreted with new semantics!
+    pub include_decoys: bool,
     pub include_identifying_transitions: Option<bool>,
     pub max_score_ms2_qvalue: Option<f64>,
     /// TSV file containing the list of precursors to filter for.
@@ -119,7 +129,7 @@ pub struct FiltersConfig {
 impl Default for FiltersConfig {
     fn default() -> Self {
         FiltersConfig {
-            decoy: true,
+            include_decoys: false, // By default, exclude decoys (only align targets)
             include_identifying_transitions: Some(false),
             max_score_ms2_qvalue: Some(1.0),
             precursor_ids: None,
@@ -152,10 +162,10 @@ pub struct AlignmentConfig {
     pub smoothing: SmoothingConfig,
     /// Retention time mapping tolerance in seconds for mapping aligned query peak to reference peak.
     pub rt_mapping_tolerance: Option<f64>,
-    /// Method to use for mapping decoy peaks. Current options are "shuffle" and "random_region".
+    /// Method to use for mapping decoy peaks. Current options are "shuffle" and "random_regions".
     #[serde(rename = "decoy_peak_mapping_method")]
     pub decoy_peak_mapping_method: String,
-    /// Size of the window to use for the decoy peak mapping. Only used when the method is "random_region".
+    /// Size of the window to use for the decoy peak mapping. Only used when the method is "random_regions".
     pub decoy_window_size: Option<usize>,
     /// Optionally compute alignment scores for the full trace alignment and peak mapping. Default is true.
     pub compute_scores: Option<bool>,

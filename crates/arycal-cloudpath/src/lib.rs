@@ -10,6 +10,7 @@ use sqmass::TransitionGroup;
 // Import necessary modules and dependencies
 pub mod tsv;
 pub mod osw;
+pub mod oswpq;
 pub mod sqmass;
 pub mod compression;
 pub mod util;

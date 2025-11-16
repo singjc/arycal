@@ -21,10 +21,11 @@ use arycal_cloudpath::{
     ChromatogramReader,
     tsv::load_precursor_ids_from_tsv,
     osw::{OswAccess, PrecursorIdData},
+    oswpq::OswpqAccess,
     sqmass::SqMassAccess,
     xic_parquet::DuckDBParquetChromatogramReader
 };
-use arycal_common::{chromatogram::{create_common_rt_space, AlignedChromatogram}, AlignedTransitionScores, PrecursorXics, AlignedTics, PeakMapping, PrecursorAlignmentResult};
+use arycal_common::{chromatogram::{create_common_rt_space, AlignedChromatogram}, AlignedTransitionScores, PrecursorXics, AlignedTics, PeakMapping, PrecursorAlignmentResult, config::FeaturesFileType};
 use arycal_core::{alignment::alignment::apply_post_alignment_to_trgrp, scoring::{compute_alignment_scores, compute_peak_mapping_scores, compute_peak_mapping_transitions_scores}};
 use arycal_core::{
     alignment::alignment::map_peaks_across_runs,
@@ -34,12 +35,123 @@ use arycal_core::{
     scoring::{create_decoy_peaks_by_random_regions, create_decoy_peaks_by_shuffling},
 };
 use arycal_cloudpath::osw::FeatureData;
-use input::Input; 
+use input::Input;
+
+/// Enum to handle both OSW and OSWPQ feature accessors
+pub enum FeatureAccessor {
+    Osw(OswAccess),
+    Oswpq(OswpqAccess),
+}
+
+impl FeatureAccessor {
+    fn fetch_transition_ids(
+        &self,
+        filter_decoys: bool,
+        include_identifying: bool,
+        precursor_ids: Option<Vec<u32>>,
+    ) -> anyhow::Result<Vec<PrecursorIdData>> {
+        match self {
+            FeatureAccessor::Osw(access) => {
+                access.fetch_transition_ids(filter_decoys, include_identifying, precursor_ids)
+                    .map_err(|e| anyhow::anyhow!(e))
+            }
+            FeatureAccessor::Oswpq(access) => {
+                access.fetch_transition_ids(filter_decoys, include_identifying, precursor_ids)
+                    .map_err(|e| anyhow::anyhow!(e))
+            }
+        }
+    }
+
+    fn fetch_feature_data_for_precursor_batch(
+        &self,
+        precursor_run_sets: &[(i32, Vec<String>)],
+    ) -> anyhow::Result<HashMap<i32, Vec<FeatureData>>> {
+        match self {
+            FeatureAccessor::Osw(access) => {
+                access.fetch_feature_data_for_precursor_batch(precursor_run_sets)
+                    .map_err(|e| anyhow::anyhow!(e))
+            }
+            FeatureAccessor::Oswpq(access) => {
+                access.fetch_feature_data_for_precursor_batch(precursor_run_sets)
+                    .map_err(|e| anyhow::anyhow!(e))
+            }
+        }
+    }
+
+    fn fetch_full_precursor_feature_data_for_runs(
+        &self,
+        precursor_id: i32,
+        runs: Vec<String>,
+    ) -> anyhow::Result<Vec<FeatureData>> {
+        match self {
+            FeatureAccessor::Osw(access) => {
+                access.fetch_full_precursor_feature_data_for_runs(precursor_id, runs)
+                    .map_err(|e| anyhow::anyhow!(e))
+            }
+            FeatureAccessor::Oswpq(access) => {
+                access.fetch_full_precursor_feature_data_for_runs(precursor_id, runs)
+                    .map_err(|e| anyhow::anyhow!(e))
+            }
+        }
+    }
+
+    fn create_feature_ms2_alignment_table(&self) -> anyhow::Result<()> {
+        match self {
+            FeatureAccessor::Osw(access) => {
+                access.create_feature_ms2_alignment_table()
+                    .map_err(|e| anyhow::anyhow!(e))
+            }
+            FeatureAccessor::Oswpq(access) => {
+                access.create_feature_ms2_alignment_table()
+                    .map_err(|e| anyhow::anyhow!(e))
+            }
+        }
+    }
+
+    fn create_feature_transition_alignment_table(&self) -> anyhow::Result<()> {
+        match self {
+            FeatureAccessor::Osw(access) => {
+                access.create_feature_transition_alignment_table()
+                    .map_err(|e| anyhow::anyhow!(e))
+            }
+            FeatureAccessor::Oswpq(access) => {
+                access.create_feature_transition_alignment_table()
+                    .map_err(|e| anyhow::anyhow!(e))
+            }
+        }
+    }
+
+    fn insert_feature_ms2_alignment_batch(&self, peak_mappings: &[PeakMapping]) -> anyhow::Result<()> {
+        match self {
+            FeatureAccessor::Osw(access) => {
+                access.insert_feature_ms2_alignment_batch(peak_mappings)
+                    .map_err(|e| anyhow::anyhow!(e))
+            }
+            FeatureAccessor::Oswpq(access) => {
+                access.write_ms2_alignment_batch(peak_mappings)
+                    .map_err(|e| anyhow::anyhow!(e))
+            }
+        }
+    }
+
+    fn insert_feature_transition_alignment_batch(&self, transition_scores: &[AlignedTransitionScores]) -> anyhow::Result<()> {
+        match self {
+            FeatureAccessor::Osw(access) => {
+                access.insert_feature_transition_alignment_batch(transition_scores)
+                    .map_err(|e| anyhow::anyhow!(e))
+            }
+            FeatureAccessor::Oswpq(access) => {
+                access.write_transition_alignment_batch(transition_scores)
+                    .map_err(|e| anyhow::anyhow!(e))
+            }
+        }
+    }
+}
 
 pub struct Runner {
     precursor_map: Vec<PrecursorIdData>,
     parameters: input::Input,
-    feature_access: Vec<OswAccess>,
+    feature_access: Vec<FeatureAccessor>,
     xic_access: Vec<Box<dyn ChromatogramReader>>,
     start: Instant
 }
@@ -48,9 +160,29 @@ impl Runner {
     pub fn new(parameters: Input) -> anyhow::Result<Self> {
         let start = Instant::now();
 
-        // TODO: Currently only supports a single OSW file
+        // Determine the feature file type
+        let feature_file_type = parameters.features.file_type.clone()
+            .unwrap_or(FeaturesFileType::OSW);
+        
+        log::info!("Using feature file type: {:?}", feature_file_type);
+
+        // TODO: Currently only supports a single feature file
         let start_io = Instant::now();
-        let osw_access = OswAccess::new(&parameters.features.file_paths[0].to_str().unwrap(), true)?;
+        let feature_accessor = match feature_file_type {
+            FeaturesFileType::OSW => {
+                log::info!("Loading OSW file: {:?}", parameters.features.file_paths[0]);
+                let osw_access = OswAccess::new(&parameters.features.file_paths[0].to_str().unwrap(), true)?;
+                FeatureAccessor::Osw(osw_access)
+            },
+            FeaturesFileType::OSWPQ => {
+                log::info!("Loading OSWPQ directory: {:?}", parameters.features.file_paths[0]);
+                let oswpq_access = OswpqAccess::new(&parameters.features.file_paths[0])?;
+                FeatureAccessor::Oswpq(oswpq_access)
+            },
+            FeaturesFileType::Unknown => {
+                return Err(anyhow::anyhow!("Unknown feature file type"));
+            }
+        };
 
         // Check if precursor_ids tsv file is provided
         let mut precursor_ids: Option<Vec<u32>> = None;
@@ -58,7 +190,16 @@ impl Runner {
             precursor_ids = Some(load_precursor_ids_from_tsv(precursor_ids_file)?);
         }
 
-        let precursor_map: Vec<PrecursorIdData> = osw_access.fetch_transition_ids(parameters.filters.decoy, parameters.filters.include_identifying_transitions.unwrap_or_default(), precursor_ids)?;
+        // filter_decoys parameter in fetch_transition_ids: when true, EXCLUDES decoys (only processes targets)
+        // include_decoys config field: when true, INCLUDES decoys (processes both targets and decoys)
+        // So: filter_decoys = !include_decoys
+        let filter_decoys = !parameters.filters.include_decoys;
+        
+        let precursor_map: Vec<PrecursorIdData> = feature_accessor.fetch_transition_ids(
+            filter_decoys, 
+            parameters.filters.include_identifying_transitions.unwrap_or_default(), 
+            precursor_ids
+        )?;
         let run_time = (Instant::now() - start_io).as_millis();
 
         info!(
@@ -92,7 +233,7 @@ impl Runner {
         Ok(Self {
             precursor_map: precursor_map.clone(),
             parameters,
-            feature_access: vec![osw_access],
+            feature_access: vec![feature_accessor],
             xic_access: xic_accessors,
             start
         })
@@ -123,12 +264,24 @@ impl Runner {
     
         log::info!("Starting alignment for {} precursors", total_count);
     
-        let feature_access = if let Some(scores_output_file) = &self.parameters.alignment.scores_output_file {
+        let separate_output_accessor: Option<FeatureAccessor>;
+        let feature_access: &[FeatureAccessor] = if let Some(scores_output_file) = &self.parameters.alignment.scores_output_file {
             let scores_output_file = scores_output_file.clone();
-            let osw_access = OswAccess::new(&scores_output_file, false)?;
-            vec![osw_access]
+            // Check file extension to determine type
+            let accessor = if scores_output_file.ends_with(".oswpqd") || scores_output_file.ends_with(".oswpq") {
+                log::info!("Creating separate OSWPQ output: {}", scores_output_file);
+                let oswpq_access = OswpqAccess::new(&scores_output_file)?;
+                FeatureAccessor::Oswpq(oswpq_access)
+            } else {
+                log::info!("Creating separate OSW output: {}", scores_output_file);
+                let osw_access = OswAccess::new(&scores_output_file, false)?;
+                FeatureAccessor::Osw(osw_access)
+            };
+            separate_output_accessor = Some(accessor);
+            std::slice::from_ref(separate_output_accessor.as_ref().unwrap())
         } else {
-            self.feature_access.clone()
+            separate_output_accessor = None;
+            &self.feature_access
         };
 
         // Initialize writers if they don't exist or drop them if they do
@@ -138,13 +291,13 @@ impl Runner {
         //     }
         // }
 
-        for osw_access in &feature_access {
-            osw_access.create_feature_ms2_alignment_table()?;
+        for accessor in feature_access {
+            accessor.create_feature_ms2_alignment_table()?;
         }
 
         if self.parameters.filters.include_identifying_transitions.unwrap_or_default() && self.parameters.alignment.compute_scores.unwrap_or_default() {
-            for osw_access in &feature_access {
-                osw_access.create_feature_transition_alignment_table()?;
+            for accessor in feature_access {
+                accessor.create_feature_transition_alignment_table()?;
             }
         }
     
@@ -1053,7 +1206,7 @@ impl Runner {
 
     fn write_ms2_alignment_results_to_db(
         &self,
-        feature_access: &[OswAccess],
+        feature_access: &[FeatureAccessor],
         results: &HashMap<i32, PrecursorAlignmentResult>,
     ) -> Result<()> {
         // Collect all MS2 alignment results
@@ -1066,12 +1219,12 @@ impl Runner {
     
         // Write all alignments to each database
         if !all_ms2_alignments.is_empty() {
-            for osw_access in feature_access {
+            for accessor in feature_access {
                 log::debug!(
                     "Inserting {} MS2 aligned features",
                     all_ms2_alignments.len()
                 );
-                osw_access.insert_feature_ms2_alignment_batch(&all_ms2_alignments)?;
+                accessor.insert_feature_ms2_alignment_batch(&all_ms2_alignments)?;
             }
         } else {
             log::warn!("No MS2 aligned features to write to the database");
@@ -1082,7 +1235,7 @@ impl Runner {
 
     fn write_transition_alignment_results_to_db(
         &self,
-        feature_access: &[OswAccess],
+        feature_access: &[FeatureAccessor],
         results: &HashMap<i32, PrecursorAlignmentResult>,
     ) -> Result<()> {
         // Collect all transition alignment results
@@ -1096,12 +1249,12 @@ impl Runner {
     
         // Write all transition alignments to each database
         if !all_transition_alignments.is_empty() {
-            for osw_access in feature_access {
+            for accessor in feature_access {
                 log::debug!(
                     "Inserting {} transition aligned features",
                     all_transition_alignments.len()
                 );
-                osw_access.insert_feature_transition_alignment_batch(&all_transition_alignments)?;
+                accessor.insert_feature_transition_alignment_batch(&all_transition_alignments)?;
             }
         }
     
