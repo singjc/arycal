@@ -21,6 +21,7 @@ use std::fs;
 use std::fmt;
 use std::error::Error;
 use std::collections::HashMap;
+use rayon::prelude::*;
 
 // Import types from the osw module that we need
 use crate::osw::{PrecursorIdData, FeatureData, ValueEntryType};
@@ -381,29 +382,31 @@ impl OswpqAccess {
         // Insert features in batches
         let batch_size = 1000;
         for chunk in features.chunks(batch_size) {
-            let mut values = Vec::new();
-            
-            for feature in chunk {
-                values.push(format!(
-                    "({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-                    feature.alignment_id,
-                    feature.run_id,
-                    feature.precursor_id,
-                    feature.feature_id,
-                    feature.reference_feature_id,
-                    feature.aligned_rt,
-                    feature.reference_rt,
-                    feature.var_xcorr_coelution_to_reference.map_or("NULL".to_string(), |v| v.to_string()),
-                    feature.var_xcorr_shape_to_reference.map_or("NULL".to_string(), |v| v.to_string()),
-                    feature.var_mi_to_reference.map_or("NULL".to_string(), |v| v.to_string()),
-                    feature.var_xcorr_coelution_to_all.map_or("NULL".to_string(), |v| v.to_string()),
-                    feature.var_xcorr_shape.map_or("NULL".to_string(), |v| v.to_string()),
-                    feature.var_mi_to_all.map_or("NULL".to_string(), |v| v.to_string()),
-                    feature.var_retention_time_deviation.map_or("NULL".to_string(), |v| v.to_string()),
-                    feature.var_peak_intensity_ratio.map_or("NULL".to_string(), |v| v.to_string()),
-                    feature.decoy,
-                ));
-            }
+            // Format values in parallel for better performance with large batches
+            let values: Vec<String> = chunk
+                .par_iter()
+                .map(|feature| {
+                    format!(
+                        "({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                        feature.alignment_id,
+                        feature.run_id,
+                        feature.precursor_id,
+                        feature.feature_id,
+                        feature.reference_feature_id,
+                        feature.aligned_rt,
+                        feature.reference_rt,
+                        feature.var_xcorr_coelution_to_reference.map_or("NULL".to_string(), |v| v.to_string()),
+                        feature.var_xcorr_shape_to_reference.map_or("NULL".to_string(), |v| v.to_string()),
+                        feature.var_mi_to_reference.map_or("NULL".to_string(), |v| v.to_string()),
+                        feature.var_xcorr_coelution_to_all.map_or("NULL".to_string(), |v| v.to_string()),
+                        feature.var_xcorr_shape.map_or("NULL".to_string(), |v| v.to_string()),
+                        feature.var_mi_to_all.map_or("NULL".to_string(), |v| v.to_string()),
+                        feature.var_retention_time_deviation.map_or("NULL".to_string(), |v| v.to_string()),
+                        feature.var_peak_intensity_ratio.map_or("NULL".to_string(), |v| v.to_string()),
+                        feature.decoy,
+                    )
+                })
+                .collect();
 
             let insert_query = format!(
                 "INSERT INTO alignment_temp VALUES {}",
@@ -415,18 +418,27 @@ impl OswpqAccess {
                 .map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
         }
 
-        // Export to parquet
-        let export_query = format!(
-            "COPY alignment_temp TO '{}' (FORMAT PARQUET)",
-            output_path.display()
-        );
+        // Export to parquet (append mode if file exists)
+        let export_query = if output_path.exists() {
+            // Read existing data, union with new data, and overwrite
+            format!(
+                "COPY (SELECT * FROM read_parquet('{}') UNION ALL SELECT * FROM alignment_temp) TO '{}' (FORMAT PARQUET)",
+                output_path.display(),
+                output_path.display()
+            )
+        } else {
+            format!(
+                "COPY alignment_temp TO '{}' (FORMAT PARQUET)",
+                output_path.display()
+            )
+        };
 
         conn
             .execute(&export_query, [])
             .map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
 
         log::info!(
-            "Wrote {} alignment features to {}",
+            "Wrote {} alignment features to {} (appending to existing data)",
             features.len(),
             output_path.display()
         );
@@ -625,18 +637,23 @@ impl OswpqAccess {
     }
 
     /// Fetch feature data for a batch of precursors
+    /// This method processes precursors in parallel for better performance
     pub fn fetch_feature_data_for_precursor_batch(
         &self,
         precursor_run_sets: &[(i32, Vec<String>)],
     ) -> Result<HashMap<i32, Vec<FeatureData>>, OpenSwathParquetError> {
-        let conn = self.create_connection()?;
-        let mut result_map: HashMap<i32, Vec<FeatureData>> = HashMap::new();
+        // Process precursors in parallel
+        // Each thread creates its own connection since DuckDB connections are not thread-safe
+        let results: Result<Vec<_>, OpenSwathParquetError> = precursor_run_sets
+            .par_iter()
+            .map(|(precursor_id, runs)| {
+                let feature_data = self.fetch_full_precursor_feature_data_for_runs(*precursor_id, runs.clone())?;
+                Ok((*precursor_id, feature_data))
+            })
+            .collect();
 
-        // Process each precursor
-        for (precursor_id, runs) in precursor_run_sets {
-            let feature_data = self.fetch_full_precursor_feature_data_for_runs(*precursor_id, runs.clone())?;
-            result_map.insert(*precursor_id, feature_data);
-        }
+        // Convert Vec of results into HashMap
+        let result_map: HashMap<i32, Vec<FeatureData>> = results?.into_iter().collect();
 
         Ok(result_map)
     }
@@ -666,9 +683,9 @@ impl OswpqAccess {
             return Ok(());
         }
 
-        // Convert PeakMapping to AlignmentFeature format
+        // Convert PeakMapping to AlignmentFeature format in parallel
         let alignment_features: Vec<AlignmentFeature> = peak_mappings
-            .iter()
+            .par_iter()
             .map(Self::peak_mapping_to_alignment_feature)
             .collect();
 
@@ -730,35 +747,37 @@ impl OswpqAccess {
         // Insert data in batches
         let batch_size = 1000;
         for chunk in peak_mappings.chunks(batch_size) {
-            let mut values = Vec::new();
-            
-            for pm in chunk {
-                values.push(format!(
-                    "({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, '{}', '{}', {}, {}, {}, {}, {}, {}, {}, {}, {})",
-                    pm.alignment_id,
-                    pm.precursor_id,
-                    pm.run_id,
-                    pm.reference_feature_id,
-                    pm.aligned_feature_id,
-                    pm.reference_rt,
-                    pm.aligned_rt,
-                    pm.reference_left_width,
-                    pm.reference_right_width,
-                    pm.aligned_left_width,
-                    pm.aligned_right_width,
-                    pm.reference_filename.replace("'", "''"),
-                    pm.aligned_filename.replace("'", "''"),
-                    pm.xcorr_coelution_to_ref.map_or("NULL".to_string(), |v| v.to_string()),
-                    pm.xcorr_shape_to_ref.map_or("NULL".to_string(), |v| v.to_string()),
-                    pm.mi_to_ref.map_or("NULL".to_string(), |v| v.to_string()),
-                    pm.xcorr_coelution_to_all.map_or("NULL".to_string(), |v| v.to_string()),
-                    pm.xcorr_shape_to_all.map_or("NULL".to_string(), |v| v.to_string()),
-                    pm.mi_to_all.map_or("NULL".to_string(), |v| v.to_string()),
-                    pm.rt_deviation.map_or("NULL".to_string(), |v| v.to_string()),
-                    pm.intensity_ratio.map_or("NULL".to_string(), |v| v.to_string()),
-                    pm.label,
-                ));
-            }
+            // Format values in parallel for better performance with large batches
+            let values: Vec<String> = chunk
+                .par_iter()
+                .map(|pm| {
+                    format!(
+                        "({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, '{}', '{}', {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                        pm.alignment_id,
+                        pm.precursor_id,
+                        pm.run_id,
+                        pm.reference_feature_id,
+                        pm.aligned_feature_id,
+                        pm.reference_rt,
+                        pm.aligned_rt,
+                        pm.reference_left_width,
+                        pm.reference_right_width,
+                        pm.aligned_left_width,
+                        pm.aligned_right_width,
+                        pm.reference_filename.replace("'", "''"),
+                        pm.aligned_filename.replace("'", "''"),
+                        pm.xcorr_coelution_to_ref.map_or("NULL".to_string(), |v| v.to_string()),
+                        pm.xcorr_shape_to_ref.map_or("NULL".to_string(), |v| v.to_string()),
+                        pm.mi_to_ref.map_or("NULL".to_string(), |v| v.to_string()),
+                        pm.xcorr_coelution_to_all.map_or("NULL".to_string(), |v| v.to_string()),
+                        pm.xcorr_shape_to_all.map_or("NULL".to_string(), |v| v.to_string()),
+                        pm.mi_to_all.map_or("NULL".to_string(), |v| v.to_string()),
+                        pm.rt_deviation.map_or("NULL".to_string(), |v| v.to_string()),
+                        pm.intensity_ratio.map_or("NULL".to_string(), |v| v.to_string()),
+                        pm.label,
+                    )
+                })
+                .collect();
 
             let insert_query = format!(
                 "INSERT INTO ms2_alignment_temp VALUES {}",
@@ -833,26 +852,28 @@ impl OswpqAccess {
         // Insert data in batches
         let batch_size = 1000;
         for chunk in transition_scores.chunks(batch_size) {
-            let mut values = Vec::new();
-            
-            for ts in chunk {
-                values.push(format!(
-                    "({}, {}, {}, '{}', {}, {}, {}, {}, {}, {}, {}, {}, {})",
-                    ts.feature_id,
-                    ts.transition_id,
-                    ts.run_id,
-                    ts.aligned_filename.replace("'", "''"),
-                    ts.label,
-                    ts.xcorr_coelution_to_ref.map_or("NULL".to_string(), |v| v.to_string()),
-                    ts.xcorr_shape_to_ref.map_or("NULL".to_string(), |v| v.to_string()),
-                    ts.mi_to_ref.map_or("NULL".to_string(), |v| v.to_string()),
-                    ts.xcorr_coelution_to_all.map_or("NULL".to_string(), |v| v.to_string()),
-                    ts.xcorr_shape_to_all.map_or("NULL".to_string(), |v| v.to_string()),
-                    ts.mi_to_all.map_or("NULL".to_string(), |v| v.to_string()),
-                    ts.rt_deviation.map_or("NULL".to_string(), |v| v.to_string()),
-                    ts.intensity_ratio.map_or("NULL".to_string(), |v| v.to_string()),
-                ));
-            }
+            // Format values in parallel for better performance with large batches
+            let values: Vec<String> = chunk
+                .par_iter()
+                .map(|ts| {
+                    format!(
+                        "({}, {}, {}, '{}', {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                        ts.feature_id,
+                        ts.transition_id,
+                        ts.run_id,
+                        ts.aligned_filename.replace("'", "''"),
+                        ts.label,
+                        ts.xcorr_coelution_to_ref.map_or("NULL".to_string(), |v| v.to_string()),
+                        ts.xcorr_shape_to_ref.map_or("NULL".to_string(), |v| v.to_string()),
+                        ts.mi_to_ref.map_or("NULL".to_string(), |v| v.to_string()),
+                        ts.xcorr_coelution_to_all.map_or("NULL".to_string(), |v| v.to_string()),
+                        ts.xcorr_shape_to_all.map_or("NULL".to_string(), |v| v.to_string()),
+                        ts.mi_to_all.map_or("NULL".to_string(), |v| v.to_string()),
+                        ts.rt_deviation.map_or("NULL".to_string(), |v| v.to_string()),
+                        ts.intensity_ratio.map_or("NULL".to_string(), |v| v.to_string()),
+                    )
+                })
+                .collect();
 
             let insert_query = format!(
                 "INSERT INTO transition_alignment_temp VALUES {}",
