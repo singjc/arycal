@@ -38,6 +38,7 @@ use arycal_cloudpath::osw::FeatureData;
 use input::Input;
 
 /// Enum to handle both OSW and OSWPQ feature accessors
+#[derive(Clone)]
 pub enum FeatureAccessor {
     Osw(OswAccess),
     Oswpq(OswpqAccess),
