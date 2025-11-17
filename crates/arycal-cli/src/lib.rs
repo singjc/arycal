@@ -409,7 +409,7 @@ impl Runner {
             if let Some(scores_output_file) = &self.parameters.alignment.scores_output_file {
                 let scores_output_file = scores_output_file.clone();
                 let osw_access = OswAccess::new(&scores_output_file, false)?;
-                vec![osw_access]
+                vec![FeatureAccessor::Osw(osw_access)]
             } else {
                 self.feature_access.clone()
             }
