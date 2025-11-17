@@ -32,51 +32,51 @@ jobs:
       matrix:
         include:
           # CLI: Linux glibc (most compatible)
-          - name: arycal-cli-linux-gnu
+          - name: x86_64-linux-gnu
             bin: arycal
             os: ubuntu-latest
             build: |
               cargo build --release
-              cp target/release/arycal artifacts/arycal-cli
+              cp target/release/arycal artifacts/arycal
 
           # CLI: fully static musl via cross (with Rust 1.85.0 in container)
-          - name: arycal-cli-linux-musl-static
+          - name: x86_64-linux-musl
             bin: arycal
             target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             build: |
               cargo install cross --version 0.2.5 --locked
               CROSS_CONTAINER_ENGINE=docker cross build --release --target=x86_64-unknown-linux-musl
-              cp target/x86_64-unknown-linux-musl/release/arycal artifacts/arycal-cli
+              cp target/x86_64-unknown-linux-musl/release/arycal artifacts/arycal
 
           # CLI: glibc + MPI
-          - name: arycal-cli-linux-gnu-mpi
+          - name: x86_64-linux-gnu-mpi
             bin: arycal
             target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             build: |
               sudo apt-get update && sudo apt-get install -y libopenmpi-dev openmpi-bin
               cargo build --release --target=x86_64-unknown-linux-gnu --features mpi
-              cp target/x86_64-unknown-linux-gnu/release/arycal artifacts/arycal-cli
+              cp target/x86_64-unknown-linux-gnu/release/arycal artifacts/arycal
 
           # macOS + Windows
-          - name: arycal-cli-macos
+          - name: x86_64-darwin
             bin: arycal
             target: x86_64-apple-darwin
             os: macos-latest
             build: |
               rustup target add x86_64-apple-darwin
               cargo build --release --target=x86_64-apple-darwin
-              cp target/x86_64-apple-darwin/release/arycal artifacts/arycal-cli
+              cp target/x86_64-apple-darwin/release/arycal artifacts/arycal
 
-          - name: arycal-cli-windows
+          - name: x86_64-windows
             bin: arycal
             target: x86_64-pc-windows-msvc
             os: windows-latest
             build: |
               rustup target add x86_64-pc-windows-msvc
               cargo build --release --target=x86_64-pc-windows-msvc
-              cp target/x86_64-pc-windows-msvc/release/arycal.exe artifacts/arycal-cli.exe
+              cp target/x86_64-pc-windows-msvc/release/arycal.exe artifacts/arycal.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -99,15 +99,25 @@ jobs:
         with:
           toolchain: 1.85.0
 
+      - name: Set version for manual runs
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=vdev" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
       - name: Build
         run: bash -lc "${{ matrix.build }}"
 
-      - name: Upload Binaries
+      - name: Upload Binaries to Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin:     ${{ matrix.bin }}
-          archive: ${{ matrix.bin }}-${{ github.ref_name }}-${{ matrix.name }}
+          archive: ${{ matrix.bin }}-${{ steps.version.outputs.version }}-${{ matrix.name }}
           target:  ${{ matrix.target || '' }}
           include: LICENSE,README.md
           tar:     unix
@@ -118,6 +128,6 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.name }}
+          name: arycal-${{ steps.version.outputs.version }}-${{ matrix.name }}
           path: artifacts/*
 
