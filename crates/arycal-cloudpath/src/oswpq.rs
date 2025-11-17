@@ -63,6 +63,7 @@ impl From<std::io::Error> for OpenSwathParquetError {
 }
 
 /// Represents a PyProphet split parquet directory structure
+#[derive(Clone)]
 pub struct OswpqAccess {
     /// Path to the .oswpqd directory
     pub base_path: PathBuf,
