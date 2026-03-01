@@ -1791,11 +1791,37 @@ impl OswAccess {
             .map(|(id, _)| *id)
             .collect();
         
-        // Get all unique run IDs
+        // Get all unique run basenames requested by the batch
         let all_runs: HashSet<String> = precursor_run_sets.iter()
             .flat_map(|(_, runs)| runs.iter().cloned())
             .collect();
-        let run_ids = self.get_run_ids(&all_runs.into_iter().collect::<Vec<_>>());
+
+        // Convert to Vec for deterministic logging / parameter order
+        let basenames_vec: Vec<String> = all_runs.iter().cloned().collect();
+
+        // Log any basenames that do not appear in the cached RUN table mapping
+        let missing_basenames: Vec<String> = basenames_vec
+            .iter()
+            .filter(|b| !self.filename_to_id.contains_key(*b))
+            .cloned()
+            .collect();
+        if !missing_basenames.is_empty() {
+            log::trace!("Basenames requested but missing from RUN table: {:?}", missing_basenames);
+        }
+
+        // Resolve RUN.ID values (preserve underlying Value type)
+        let run_ids = self.get_run_ids(&basenames_vec);
+        log::trace!("Requested basenames: {:?} -> Resolved run_ids: {:?}", basenames_vec, run_ids);
+
+        // Also log per-precursor resolution to aid debugging when a precursor lacks feature data
+        for (prec_id, runs) in precursor_run_sets.iter() {
+            let resolved = self.get_run_ids(&runs.clone());
+            if resolved.is_empty() {
+                log::trace!("Precursor {}: requested runs {:?} -> resolved run_ids []", prec_id, runs);
+            } else {
+                log::trace!("Precursor {}: requested runs {:?} -> resolved run_ids {:?}", prec_id, runs, resolved);
+            }
+        }
         
         // Check if SCORE_MS2 table exists
         let score_ms2_exists = conn.query_row(
