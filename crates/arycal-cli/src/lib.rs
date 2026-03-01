@@ -225,6 +225,9 @@ impl Runner {
                     "parquet" => DuckDBParquetChromatogramReader::new(path.to_str().unwrap())
                         .map(|r| Box::new(r) as Box<dyn ChromatogramReader>)
                         .map_err(|e| anyhow::anyhow!(e)),
+                    "xic" => DuckDBParquetChromatogramReader::new(path.to_str().unwrap())
+                        .map(|r| Box::new(r) as Box<dyn ChromatogramReader>)
+                        .map_err(|e| anyhow::anyhow!(e)),
                     _ => Err(anyhow::anyhow!("Unsupported XIC file type: {:?}", parameters.xic.file_type.clone().unwrap().as_str())),
                 }
             })
