@@ -1907,12 +1907,43 @@ impl OswAccess {
         
             // Prepare and execute
             let mut stmt = conn.prepare(&sql_query)?;
-            
+
             // Build parameters - precursor_ids first, then run_ids (Values preserved)
             let mut params: Vec<rusqlite::types::Value> = precursor_ids_chunk.iter()
                 .map(|&id| rusqlite::types::Value::from(id))
                 .collect();
             params.extend(run_ids.iter().cloned());
+
+            // Diagnostic: log SQL and parameters at trace level to aid debugging missing rows
+            let param_display: Vec<String> = params
+                .iter()
+                .map(|v| match v {
+                    rusqlite::types::Value::Integer(i) => format!("Integer({})", i),
+                    rusqlite::types::Value::Real(f) => format!("Real({})", f),
+                    rusqlite::types::Value::Text(s) => format!("Text({})", s),
+                    rusqlite::types::Value::Blob(b) => format!("Blob(len={})", b.len()),
+                    rusqlite::types::Value::Null => "Null".to_string(),
+                })
+                .collect();
+
+            // Build a human-readable interpolated SQL for debugging by sequentially replacing
+            // each '?' with the corresponding parameter value (quoted for TEXT).
+            let mut interpolated = String::new();
+            let mut param_iter = param_display.iter();
+            for ch in sql_query.chars() {
+                if ch == '?' {
+                    if let Some(p) = param_iter.next() {
+                        interpolated.push_str(p);
+                    } else {
+                        interpolated.push('?');
+                    }
+                } else {
+                    interpolated.push(ch);
+                }
+            }
+
+            log::trace!("Executing feature fetch SQL (interpolated): {}", interpolated);
+            log::trace!("Executing feature fetch SQL (raw): {}\nwith params: {:?}", sql_query, param_display);
         
             // Process results
             let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
