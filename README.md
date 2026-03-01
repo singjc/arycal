@@ -32,6 +32,7 @@
     - **PyProphet split parquet format** (`.oswpqd` directories) - fully parallelized reader
     - **OSW SQLite format** (`.osw` files)
     - **sqMass XIC files** and **Parquet XIC files**
+    - **sqMass XIC files**, **Parquet XIC files**, and OpenMS Parquet XIC (`.xic`) files
   - Automatic configuration template generation for easy setup
 
 ## Installation
@@ -210,6 +211,26 @@ For PyProphet split parquet format (faster, parallelized):
     "batch_size": 10000,
     "method": "FFTDTW",
     "reference_type": "star"
+  }
+}
+```
+
+### OpenMS XIC Parquet Format (.xic)
+
+OpenMS can write XICs to a Parquet file with a PyProphet-compatible schema (commonly using the `.xic` extension). ARYCAL supports reading these Parquet XICs; they include RT/INTENSITY binary arrays, compression flags and additional metadata columns (RUN_ID, SOURCE_FILE, MS_LEVEL, PRECURSOR_ID, TRANSITION_ID, MODIFIED_SEQUENCE, charges, decoy flags, etc.).
+
+Example configuration for OpenMS `.xic` files:
+
+```json
+{
+  "xic": {
+    "include-precursor": true,
+    "num-isotopes": 3,
+    "file-type": "xic",
+    "file-paths": [
+      "data/xics/run1.xic.parquet",
+      "data/xics/run2.xic.parquet"
+    ]
   }
 }
 ```
