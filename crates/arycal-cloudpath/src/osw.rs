@@ -1828,8 +1828,8 @@ impl OswAccess {
             .flat_map(|(_, runs)| runs.iter().cloned())
             .collect();
 
-        // Convert to Vec for deterministic logging / parameter order
-        let basenames_vec: Vec<String> = all_runs.iter().cloned().collect();
+    // Convert to Vec for deterministic logging / parameter order
+    let basenames_vec: Vec<String> = all_runs.iter().cloned().collect();
 
         // Log any basenames that do not appear in the cached RUN table mapping
         let missing_basenames: Vec<String> = basenames_vec
@@ -1871,13 +1871,15 @@ impl OswAccess {
         let mut feature_data_map: HashMap<i32, HashMap<String, FeatureData>> = HashMap::new();
 
         // Calculate safe chunk size for precursor IDs given the number of run_id params
-        let safe_chunk_size = if run_ids.len() >= SQLITE_MAX_VARS {
+        // Also cap the chunk size to a reasonable value to avoid pathological very-large IN-lists
+        let calculated = if run_ids.len() >= SQLITE_MAX_VARS {
             // Defensive: if run_ids alone exceed the limit, fall back to a small chunk and log
             log::warn!("Number of run_ids ({}) exceeds SQLITE_MAX_VARS ({}). Queries may fail.", run_ids.len(), SQLITE_MAX_VARS);
             1_usize
         } else {
             SQLITE_MAX_VARS - run_ids.len()
         };
+        let safe_chunk_size = std::cmp::min(calculated, 200_usize);
 
         // Process precursor IDs in batches of safe_chunk_size
         for precursor_ids_chunk in precursor_ids.chunks(safe_chunk_size) {
@@ -1916,23 +1918,29 @@ impl OswAccess {
             sql_query.push_str(&precursor_ids_chunk.iter().map(|_| "?").collect::<Vec<_>>().join(","));
             sql_query.push_str(")");
         
-            if !basenames_vec.is_empty() {
-                // Use filename-based matching (FILENAME LIKE '%basename%') instead of binding RUN.ID.
-                // This avoids mismatches when RUN.ID is stored as BLOB (binary) while FEATURE.RUN_ID
-                // is an integer. Basename matching is robust for small numbers of runs and is used
-                // elsewhere in the codebase.
-                let mut run_filter = String::new();
-                for b in &basenames_vec {
-                    // Escape single quotes for SQL string literals
-                    let esc = b.replace('\'', "''");
-                    run_filter.push_str(&format!("FILENAME LIKE '%{}%' OR ", esc));
+                if !basenames_vec.is_empty() {
+                    // Only include basenames that actually resolved to RUN entries to avoid building
+                    // extremely long OR lists for basenames that do not exist in the DB.
+                    let resolved_basenames: Vec<String> = basenames_vec.iter()
+                        .filter(|b| self.filename_to_id.contains_key(*b))
+                        .cloned()
+                        .collect();
+
+                    if !resolved_basenames.is_empty() {
+                        // Use filename-based matching (FILENAME LIKE '%basename%') instead of binding RUN.ID.
+                        // Escape single quotes for SQL string literals
+                        let mut run_filter = String::new();
+                        for b in &resolved_basenames {
+                            let esc = b.replace('\'', "''");
+                            run_filter.push_str(&format!("FILENAME LIKE '%{}%' OR ", esc));
+                        }
+                        // Remove trailing ' OR '
+                        run_filter.truncate(run_filter.len().saturating_sub(4));
+                        sql_query.push_str(&format!(" AND ({})", run_filter));
+                    } else {
+                        log::trace!("No requested basenames resolved to RUN entries; skipping run filename filter for this chunk");
+                    }
                 }
-                if !run_filter.is_empty() {
-                    // Remove trailing ' OR '
-                    run_filter.truncate(run_filter.len().saturating_sub(4));
-                    sql_query.push_str(&format!(" AND ({})", run_filter));
-                }
-            }
         
             sql_query.push_str(" ORDER BY FEATURE.PRECURSOR_ID, FILENAME, EXP_RT");
         
@@ -2100,8 +2108,9 @@ impl OswAccess {
             }
 
             // If no rows were returned for this chunk, retry a simplified query without the RUN.ID filter
-            // to determine whether the RUN filter is excluding matches. This is a diagnostic fallback only
-            // (does not modify state) and will log a small sample of rows if present.
+            // to determine whether the RUN filter or large IN-list is excluding matches. If that still
+            // returns zero, fall back to per-precursor small-batch fetches and populate the map so
+            // the rest of the pipeline can proceed (this is slower but safe).
             if rows_processed == 0 {
                 log::trace!("No rows returned for chunk - retrying without RUN.ID filter to diagnose cause");
 
@@ -2133,6 +2142,73 @@ impl OswAccess {
                                         match conn.query_row(probe_sql, rusqlite::params![pid], |r| r.get::<_, i64>(0)) {
                                             Ok(cnt) => log::trace!("Probe PRECURSOR_ID={} -> FEATURE rows: {}", pid, cnt),
                                             Err(e) => log::trace!("Probe PRECURSOR_ID={} -> query failed: {}", pid, e.to_string()),
+                                        }
+                                    }
+
+                                    // As a last-resort recovery: fetch each precursor individually in small batches
+                                    // and insert their rows into feature_data_map so downstream code can proceed.
+                                    log::trace!("Falling back to per-precursor fetch for {} precursors", precursor_ids_chunk.len());
+                                    for &pid in precursor_ids_chunk.iter() {
+                                        let single_sql = "SELECT FILENAME, RUN.ID AS RUN_ID, FEATURE.PRECURSOR_ID, FEATURE.ID AS FEATURE_ID, EXP_RT, LEFT_WIDTH, RIGHT_WIDTH, FEATURE_MS2.AREA_INTENSITY AS INTENSITY FROM FEATURE INNER JOIN RUN ON RUN.ID = FEATURE.RUN_ID LEFT JOIN FEATURE_MS2 ON FEATURE_MS2.FEATURE_ID = FEATURE.ID WHERE FEATURE.PRECURSOR_ID = ?1 ORDER BY EXP_RT";
+                                        match conn.prepare(single_sql) {
+                                            Ok(mut s) => {
+                                                match s.query_map(rusqlite::params![pid], |row| {
+                                                    Ok((
+                                                        row.get::<_, String>(0)?,
+                                                        row.get::<_, i64>(1)?,
+                                                        row.get::<_, i32>(2)?,
+                                                        row.get::<_, i64>(3)?,
+                                                        row.get::<_, f64>(4)?,
+                                                        row.get::<_, f64>(5)?,
+                                                        row.get::<_, f64>(6)?,
+                                                        row.get::<_, Option<f64>>(7)?,
+                                                    ))
+                                                }) {
+                                                    Ok(mapped) => {
+                                                        for row_res in mapped {
+                                                            match row_res {
+                                                                Ok((filename, run_id, precursor_id, feature_id, exp_rt, left_width, right_width, intensity_option)) => {
+                                                                    let precursor_data = feature_data_map.entry(precursor_id).or_default();
+                                                                    let feature_data = precursor_data.entry(filename.clone()).or_insert_with(|| FeatureData::new(
+                                                                        filename.clone(),
+                                                                        run_id,
+                                                                        precursor_id,
+                                                                        Some(ValueEntryType::Multiple(vec![])),
+                                                                        ValueEntryType::Multiple(vec![]),
+                                                                        Some(ValueEntryType::Multiple(vec![])),
+                                                                        Some(ValueEntryType::Multiple(vec![])),
+                                                                        Some(ValueEntryType::Multiple(vec![])),
+                                                                        Some(ValueEntryType::Multiple(vec![])),
+                                                                        Some(ValueEntryType::Multiple(vec![])),
+                                                                        Some(ValueEntryType::Multiple(vec![])),
+                                                                    ));
+
+                                                                    if let Some(ValueEntryType::Multiple(ref mut ids)) = feature_data.feature_id {
+                                                                        ids.push(feature_id);
+                                                                    }
+                                                                    if let ValueEntryType::Multiple(ref mut exps) = feature_data.exp_rt {
+                                                                        exps.push(exp_rt);
+                                                                    }
+                                                                    if let Some(ValueEntryType::Multiple(ref mut widths)) = feature_data.left_width {
+                                                                        widths.push(left_width);
+                                                                    }
+                                                                    if let Some(ValueEntryType::Multiple(ref mut widths)) = feature_data.right_width {
+                                                                        widths.push(right_width);
+                                                                    }
+                                                                    if let Some(int_val) = intensity_option {
+                                                                        if let Some(ValueEntryType::Multiple(ref mut intensities)) = feature_data.intensity {
+                                                                            intensities.push(int_val);
+                                                                        }
+                                                                    }
+                                                                }
+                                                                Err(e) => log::trace!("Per-precursor row error for {}: {}", pid, e.to_string()),
+                                                            }
+                                                        }
+                                                    }
+                                                    Err(e) => log::trace!("Per-precursor query_map failed for {}: {}", pid, e.to_string()),
+                                                }
+                                            }
+                                            Err(e) => log::trace!("Per-precursor prepare failed for {}: {}", pid, e.to_string()),
                                         }
                                     }
                                 }
