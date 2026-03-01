@@ -1949,52 +1949,70 @@ impl OswAccess {
             // Prepare and execute
             let mut stmt = conn.prepare(&sql_query)?;
 
-            // Diagnostic: log SQL for debugging. We inline the precursor IDs so there are
-            // no host parameters for the IN-list; this avoids surprises in parameter binding.
+            // Diagnostic: log SQL for debugging.
             log::trace!("Executing feature fetch SQL: {}", sql_query);
 
-            // Process results - no bound params for the IN-list (we inlined the integers)
-            let rows = stmt.query_map([], |row| {
-                let filename: String = row.get(0)?;
-                let run_id: i64 = row.get(1)?;
-                let precursor_id: i32 = row.get(2)?;
-                let feature_id: i64 = row.get(3)?;
-                let exp_rt: f64 = row.get(4)?;
-                let left_width: f64 = row.get(5)?;
-                let right_width: f64 = row.get(6)?;
-                // INTENSITY may be NULL if FEATURE_MS2 has no matching row
-                let intensity_option: Option<f64> = row.get(7)?;
+            // Process results - collect into a Vec of tuples so we can iterate and
+            // update the feature_data_map. This avoids mismatched closure types
+            // when using different parameter slices.
+            let feature_rows: Vec<(i32, String, i64, i64, f64, f64, f64, Option<f64>, Option<i32>, Option<f64>)> = if sql_query.contains("RUN.ID IN (") && !run_ids.is_empty() {
+                // Build owned values and a slice of &dyn ToSql referencing them
+                let params_values: Vec<rusqlite::types::Value> = run_ids.clone();
+                let params_refs: Vec<&dyn rusqlite::ToSql> = params_values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+                stmt.query_map(params_refs.as_slice(), |row| {
+                    let filename: String = row.get(0)?;
+                    let run_id: i64 = row.get(1)?;
+                    let precursor_id: i32 = row.get(2)?;
+                    let feature_id: i64 = row.get(3)?;
+                    let exp_rt: f64 = row.get(4)?;
+                    let left_width: f64 = row.get(5)?;
+                    let right_width: f64 = row.get(6)?;
+                    let intensity_option: Option<f64> = row.get(7)?;
 
-                // Optional fields (if SCORE_MS2 exists) may also be NULL
-                let rank_option = if score_ms2_exists {
-                    row.get::<_, Option<i32>>(8)?
-                } else {
-                    None
-                };
+                    let rank_option = if score_ms2_exists {
+                        row.get::<_, Option<i32>>(8)?
+                    } else {
+                        None
+                    };
 
-                let qvalue_option = if score_ms2_exists {
-                    row.get::<_, Option<f64>>(9)?
-                } else {
-                    None
-                };
-                
-                Ok((
-                    precursor_id,
-                    filename,
-                    run_id,
-                    feature_id,
-                    exp_rt,
-                    left_width,
-                    right_width,
-                    intensity_option,
-                    rank_option,
-                    qvalue_option,
-                ))
-            })?;
+                    let qvalue_option = if score_ms2_exists {
+                        row.get::<_, Option<f64>>(9)?
+                    } else {
+                        None
+                    };
+
+                    Ok((precursor_id, filename, run_id, feature_id, exp_rt, left_width, right_width, intensity_option, rank_option, qvalue_option))
+                })?.collect::<Result<Vec<_>, _>>()?
+            } else {
+                stmt.query_map([], |row| {
+                    let filename: String = row.get(0)?;
+                    let run_id: i64 = row.get(1)?;
+                    let precursor_id: i32 = row.get(2)?;
+                    let feature_id: i64 = row.get(3)?;
+                    let exp_rt: f64 = row.get(4)?;
+                    let left_width: f64 = row.get(5)?;
+                    let right_width: f64 = row.get(6)?;
+                    let intensity_option: Option<f64> = row.get(7)?;
+
+                    let rank_option = if score_ms2_exists {
+                        row.get::<_, Option<i32>>(8)?
+                    } else {
+                        None
+                    };
+
+                    let qvalue_option = if score_ms2_exists {
+                        row.get::<_, Option<f64>>(9)?
+                    } else {
+                        None
+                    };
+
+                    Ok((precursor_id, filename, run_id, feature_id, exp_rt, left_width, right_width, intensity_option, rank_option, qvalue_option))
+                })?.collect::<Result<Vec<_>, _>>()?
+            };
         
             let mut rows_processed: usize = 0;
             let mut precursors_seen: std::collections::HashSet<i32> = std::collections::HashSet::new();
-            for row in rows {
+            for row in feature_rows {
                 let (
                     precursor_id,
                     filename,
@@ -2006,7 +2024,7 @@ impl OswAccess {
                     intensity_option,
                     rank_option,
                     qvalue_option,
-                ) = row?;
+                ) = row;
                 
                 // Get or create the precursor's feature data map
                 let precursor_data = feature_data_map.entry(precursor_id)
