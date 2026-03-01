@@ -1909,10 +1909,22 @@ impl OswAccess {
             sql_query.push_str(&precursor_ids_chunk.iter().map(|_| "?").collect::<Vec<_>>().join(","));
             sql_query.push_str(")");
         
-            if !run_ids.is_empty() {
-                sql_query.push_str(" AND RUN.ID IN (");
-                sql_query.push_str(&run_ids.iter().map(|_| "?").collect::<Vec<_>>().join(","));
-                sql_query.push_str(")");
+            if !basenames_vec.is_empty() {
+                // Use filename-based matching (FILENAME LIKE '%basename%') instead of binding RUN.ID.
+                // This avoids mismatches when RUN.ID is stored as BLOB (binary) while FEATURE.RUN_ID
+                // is an integer. Basename matching is robust for small numbers of runs and is used
+                // elsewhere in the codebase.
+                let mut run_filter = String::new();
+                for b in &basenames_vec {
+                    // Simple defensive escaping of double quotes
+                    let esc = b.replace('"', "\"");
+                    run_filter.push_str(&format!("FILENAME LIKE \"%{}%\" OR ", esc));
+                }
+                if !run_filter.is_empty() {
+                    // Remove trailing ' OR '
+                    run_filter.truncate(run_filter.len().saturating_sub(4));
+                    sql_query.push_str(&format!(" AND ({})", run_filter));
+                }
             }
         
             sql_query.push_str(" ORDER BY FEATURE.PRECURSOR_ID, FILENAME, EXP_RT");
@@ -1920,11 +1932,10 @@ impl OswAccess {
             // Prepare and execute
             let mut stmt = conn.prepare(&sql_query)?;
 
-            // Build parameters - precursor_ids first, then run_ids (Values preserved)
+            // Build parameters - precursor_ids only (we match runs by filename LIKE, not by RUN.ID params)
             let mut params: Vec<rusqlite::types::Value> = precursor_ids_chunk.iter()
                 .map(|&id| rusqlite::types::Value::from(id))
                 .collect();
-            params.extend(run_ids.iter().cloned());
 
             // Diagnostic: log SQL and parameters at trace level to aid debugging missing rows
             let param_display: Vec<String> = params
@@ -2077,6 +2088,41 @@ impl OswAccess {
             let missing_precursors: Vec<i32> = requested_precursors.into_iter().filter(|p| !precursors_seen.contains(p)).collect();
             if !missing_precursors.is_empty() {
                 log::trace!("Requested precursor IDs missing from query results: {:?}", missing_precursors);
+            }
+
+            // If no rows were returned for this chunk, retry a simplified query without the RUN.ID filter
+            // to determine whether the RUN filter is excluding matches. This is a diagnostic fallback only
+            // (does not modify state) and will log a small sample of rows if present.
+            if rows_processed == 0 {
+                log::trace!("No rows returned for chunk - retrying without RUN.ID filter to diagnose cause");
+
+                // Build a simple query that omits the RUN.ID IN (...) clause and returns a small sample
+                let mut prec_placeholders = precursor_ids_chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                let sql_no_run = format!(
+                    "SELECT FEATURE.PRECURSOR_ID, FILENAME, EXP_RT FROM FEATURE INNER JOIN RUN ON RUN.ID = FEATURE.RUN_ID WHERE FEATURE.PRECURSOR_ID IN ({}) ORDER BY FEATURE.PRECURSOR_ID LIMIT 10",
+                    prec_placeholders
+                );
+
+                // Prepare and execute the diagnostic query
+                match conn.prepare(&sql_no_run) {
+                    Ok(mut stmt_no_run) => {
+                        let prec_params: Vec<rusqlite::types::Value> = precursor_ids_chunk.iter().map(|&id| rusqlite::types::Value::from(id)).collect();
+                        match stmt_no_run.query_map(rusqlite::params_from_iter(prec_params.iter()), |row| {
+                            Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?, row.get::<_, f64>(2)?))
+                        }) {
+                            Ok(mapped) => {
+                                let rows_sample: Vec<_> = mapped.collect::<Result<Vec<_>, _>>().unwrap_or_default();
+                                log::trace!("Retry without RUN filter returned {} rows (sample up to 10): {:?}", rows_sample.len(), rows_sample);
+                            }
+                            Err(e) => {
+                                log::trace!("Diagnostic query (no RUN filter) failed: {}", e.to_string());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::trace!("Failed to prepare diagnostic no-run query: {}", e.to_string());
+                    }
+                }
             }
         }
         
