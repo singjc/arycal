@@ -1831,7 +1831,7 @@ impl OswAccess {
                 FROM FEATURE
                 INNER JOIN RUN ON RUN.ID = FEATURE.RUN_ID
                 INNER JOIN PRECURSOR ON PRECURSOR.ID = FEATURE.PRECURSOR_ID
-                INNER JOIN FEATURE_MS2 ON FEATURE_MS2.FEATURE_ID = FEATURE.ID
+                LEFT JOIN FEATURE_MS2 ON FEATURE_MS2.FEATURE_ID = FEATURE.ID
             "#);
         
             if score_ms2_exists {
@@ -1868,17 +1868,18 @@ impl OswAccess {
                 let exp_rt: f64 = row.get(4)?;
                 let left_width: f64 = row.get(5)?;
                 let right_width: f64 = row.get(6)?;
-                let intensity: f64 = row.get(7)?;
-        
-                // Optional fields (if SCORE_MS2 exists)
+                // INTENSITY may be NULL if FEATURE_MS2 has no matching row
+                let intensity_option: Option<f64> = row.get(7)?;
+
+                // Optional fields (if SCORE_MS2 exists) may also be NULL
                 let rank_option = if score_ms2_exists {
-                    Some(row.get::<_, i32>(8)?)
+                    row.get::<_, Option<i32>>(8)?
                 } else {
                     None
                 };
-        
+
                 let qvalue_option = if score_ms2_exists {
-                    Some(row.get::<_, f64>(9)?)
+                    row.get::<_, Option<f64>>(9)?
                 } else {
                     None
                 };
@@ -1891,7 +1892,7 @@ impl OswAccess {
                     exp_rt,
                     left_width,
                     right_width,
-                    intensity,
+                    intensity_option,
                     rank_option,
                     qvalue_option,
                 ))
@@ -1906,7 +1907,7 @@ impl OswAccess {
                     exp_rt,
                     left_width,
                     right_width,
-                    intensity,
+                    intensity_option,
                     rank_option,
                     qvalue_option,
                 ) = row?;
@@ -1948,8 +1949,10 @@ impl OswAccess {
                     widths.push(right_width);
                 }
         
-                if let Some(ValueEntryType::Multiple(ref mut intensities)) = feature_data.intensity {
-                    intensities.push(intensity);
+                if let Some(intensity_val) = intensity_option {
+                    if let Some(ValueEntryType::Multiple(ref mut intensities)) = feature_data.intensity {
+                        intensities.push(intensity_val);
+                    }
                 }
         
                 if let Some(ValueEntryType::Multiple(ref mut ranks)) = feature_data.rank {
@@ -1957,7 +1960,7 @@ impl OswAccess {
                         ranks.push(rank);
                     }
                 }
-        
+
                 if let Some(ValueEntryType::Multiple(ref mut qvalues)) = feature_data.qvalue {
                     if let Some(qvalue) = qvalue_option {
                         qvalues.push(qvalue);
