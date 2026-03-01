@@ -302,7 +302,7 @@ impl PrecursorIdData {
 #[derive(Clone)]
 pub struct OswAccess {
     pool: Pool<SqliteConnectionManager>,
-    filename_to_id: HashMap<String, i64>,  // basename -> RUN_ID
+    filename_to_id: HashMap<String, rusqlite::types::Value>,  // basename -> RUN.ID value (preserve type: Integer/Text/Blob)
 }
 
 impl OswAccess {
@@ -375,21 +375,24 @@ impl OswAccess {
     }
 
     /// Loads the RUN table into memory
-    fn load_run_table(pool: &Pool<SqliteConnectionManager>) -> Result<HashMap<String, i64>, OpenSwathSqliteError> {
+    fn load_run_table(pool: &Pool<SqliteConnectionManager>) -> Result<HashMap<String, rusqlite::types::Value>, OpenSwathSqliteError> {
         let conn = pool.get()
             .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
-
+        // Read RUN.ID preserving its runtime type (Integer/Text/Blob) so we can
+        // use the exact same typed value as a query parameter when matching against FEATURE.RUN_ID.
         let query = "SELECT ID, FILENAME FROM RUN";
         let mut stmt = conn.prepare(query)?;
 
-        let mut filename_to_id = HashMap::new();
+        let mut filename_to_id: HashMap<String, rusqlite::types::Value> = HashMap::new();
 
         let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            let id_value = row.get::<_, rusqlite::types::Value>(0)?;
+            let filename = row.get::<_, String>(1)?;
+            Ok((id_value, filename))
         })?;
 
         for row in rows {
-            let (id, filename) = row?;
+            let (id_value, filename) = row?;
             let basename = Path::new(&filename)
                 .file_stem()
                 .and_then(|s| s.to_str())
@@ -403,7 +406,7 @@ impl OswAccess {
                 basename
             };
 
-            filename_to_id.insert(basename, id);
+            filename_to_id.insert(basename, id_value);
         }
 
         log::trace!("Loaded RUN table with {} entries", filename_to_id.len());
@@ -412,10 +415,10 @@ impl OswAccess {
     }
 
     /// Get RUN_IDs for given basenames
-    fn get_run_ids(&self, basenames: &[String]) -> Vec<i64> {
+    fn get_run_ids(&self, basenames: &[String]) -> Vec<rusqlite::types::Value> {
         basenames.iter()
             .filter_map(|name| self.filename_to_id.get(name))
-            .copied()
+            .cloned()
             .collect()
     }
 
@@ -1443,9 +1446,9 @@ impl OswAccess {
             .prepare(&sql_query)
             .map_err(OpenSwathSqliteError::from)?;
 
-        // Build parameters - precursor_id first, then run_ids
-        let mut params = vec![rusqlite::types::Value::from(precursor_id)];
-        params.extend(run_ids.iter().map(|&id| rusqlite::types::Value::from(id)));
+    // Build parameters - precursor_id first, then run_ids (Values preserved)
+    let mut params = vec![rusqlite::types::Value::from(precursor_id)];
+    params.extend(run_ids.iter().cloned());
 
         // log::debug!("SQL Query: {}", sql_query);
 
@@ -1834,11 +1837,11 @@ impl OswAccess {
             // Prepare and execute
             let mut stmt = conn.prepare(&sql_query)?;
             
-            // Build parameters - precursor_ids first, then run_ids
+            // Build parameters - precursor_ids first, then run_ids (Values preserved)
             let mut params: Vec<rusqlite::types::Value> = precursor_ids_chunk.iter()
                 .map(|&id| rusqlite::types::Value::from(id))
                 .collect();
-            params.extend(run_ids.iter().map(|&id| rusqlite::types::Value::from(id)));
+            params.extend(run_ids.iter().cloned());
         
             // Process results
             let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
