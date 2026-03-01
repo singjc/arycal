@@ -16,6 +16,7 @@ pub mod compression;
 pub mod util;
 pub mod msnumpress;
 pub mod xic_parquet;
+pub mod openms_xic_parquet;
  
 pub trait ChromatogramReader: Send + Sync {
     fn new(db_path: &str) -> anyhow::Result<Self>
