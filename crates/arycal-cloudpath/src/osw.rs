@@ -1984,6 +1984,8 @@ impl OswAccess {
                 ))
             })?;
         
+            let mut rows_processed: usize = 0;
+            let mut precursors_seen: std::collections::HashSet<i32> = std::collections::HashSet::new();
             for row in rows {
                 let (
                     precursor_id,
@@ -2052,6 +2054,17 @@ impl OswAccess {
                         qvalues.push(qvalue);
                     }
                 }
+                rows_processed += 1;
+                precursors_seen.insert(precursor_id);
+            }
+
+            // Diagnostic: report how many rows were returned and which precursors were found
+            log::trace!("Feature fetch returned {} rows for precursor chunk (precursors seen: {})", rows_processed, precursors_seen.len());
+            // Log any precursors in the requested chunk that were not seen in the results
+            let requested_precursors: Vec<i32> = precursor_ids_chunk.iter().cloned().collect();
+            let missing_precursors: Vec<i32> = requested_precursors.into_iter().filter(|p| !precursors_seen.contains(p)).collect();
+            if !missing_precursors.is_empty() {
+                log::trace!("Requested precursor IDs missing from query results: {:?}", missing_precursors);
             }
         }
         
