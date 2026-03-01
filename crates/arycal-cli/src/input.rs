@@ -119,10 +119,10 @@ impl Input {
     /// Validate the parameters.
     fn validate(&self) -> Result<()> {
         // Validate xic type
-        if self.xic.file_type != Some(XicFileType::SqMass) && self.xic.file_type != Some(XicFileType::Parquet) {
+        if self.xic.file_type != Some(XicFileType::SqMass) && self.xic.file_type != Some(XicFileType::Parquet) && self.xic.file_type != Some(XicFileType::Xic) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "Invalid xic type; expected 'sqMass' or 'parquet'",
+                "Invalid xic type; expected 'sqMass', 'parquet', or 'xic'",
             )
             .into());
         }
