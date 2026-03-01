@@ -25,6 +25,7 @@ use arycal_cloudpath::{
     sqmass::SqMassAccess,
     xic_parquet::DuckDBParquetChromatogramReader
 };
+use arycal_cloudpath::openms_xic_parquet::OpenMSXicParquetChromatogramReader;
 use arycal_common::{chromatogram::{create_common_rt_space, AlignedChromatogram}, AlignedTransitionScores, PrecursorXics, AlignedTics, PeakMapping, PrecursorAlignmentResult, config::FeaturesFileType};
 use arycal_core::{alignment::alignment::apply_post_alignment_to_trgrp, scoring::{compute_alignment_scores, compute_peak_mapping_scores, compute_peak_mapping_transitions_scores}};
 use arycal_core::{
@@ -225,7 +226,7 @@ impl Runner {
                     "parquet" => DuckDBParquetChromatogramReader::new(path.to_str().unwrap())
                         .map(|r| Box::new(r) as Box<dyn ChromatogramReader>)
                         .map_err(|e| anyhow::anyhow!(e)),
-                    "xic" => DuckDBParquetChromatogramReader::new(path.to_str().unwrap())
+                    "xic" => OpenMSXicParquetChromatogramReader::new(path.to_str().unwrap())
                         .map(|r| Box::new(r) as Box<dyn ChromatogramReader>)
                         .map_err(|e| anyhow::anyhow!(e)),
                     _ => Err(anyhow::anyhow!("Unsupported XIC file type: {:?}", parameters.xic.file_type.clone().unwrap().as_str())),
