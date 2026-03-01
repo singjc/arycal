@@ -1884,7 +1884,7 @@ impl OswAccess {
         };
         let safe_chunk_size = std::cmp::min(calculated, 200_usize);
 
-        // Process precursor IDs in batches of safe_chunk_size
+    // Process precursor IDs in batches of safe_chunk_size
         for precursor_ids_chunk in precursor_ids.chunks(safe_chunk_size) {
             // Build the query
             let mut sql_query = r#"
@@ -1924,6 +1924,9 @@ impl OswAccess {
             let prec_list = precursor_ids_chunk.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
             sql_query.push_str(&format!(" WHERE FEATURE.PRECURSOR_ID IN ({})", prec_list));
         
+                // Track whether we added run placeholders so we know to bind params later
+                let mut run_placeholders_added = false;
+
                 if !basenames_vec.is_empty() {
                     // Only include basenames that actually resolved to RUN entries. Prefer
                     // exact RUN.ID matching (parameterized) instead of substring matching
@@ -1943,6 +1946,7 @@ impl OswAccess {
                         // comparisons succeed regardless of whether RUN.ID is stored
                         // as BLOB or TEXT.
                         sql_query.push_str(&format!(" AND CAST(RUN.ID AS TEXT) IN ({})", run_placeholders));
+                        run_placeholders_added = true;
 
                         // We'll bind these run_id values (as rusqlite::types::Value) when
                         // executing the statement below. To keep params ordering clear,
@@ -1963,7 +1967,7 @@ impl OswAccess {
             // Process results - collect into a Vec of tuples so we can iterate and
             // update the feature_data_map. This avoids mismatched closure types
             // when using different parameter slices.
-            let feature_rows: Vec<(i32, String, i64, i64, f64, f64, f64, Option<f64>, Option<i32>, Option<f64>)> = if sql_query.contains("RUN.ID IN (") && !run_ids.is_empty() {
+            let feature_rows: Vec<(i32, String, i64, i64, f64, f64, f64, Option<f64>, Option<i32>, Option<f64>)> = if run_placeholders_added && !run_ids.is_empty() {
                     // Convert run_ids to textual values so they match RUN.ID TEXT/ BLOB
                     // representations in the DB (some RUN.ID fields are stored as BLOB
                     // containing ASCII digits). We bind them as TEXT parameters.
