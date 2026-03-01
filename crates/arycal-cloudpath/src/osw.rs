@@ -1492,8 +1492,8 @@ impl OswAccess {
             .map_err(OpenSwathSqliteError::from)?;
 
     // Build parameters - precursor_id first, then run_ids (Values preserved)
-    let mut params = vec![rusqlite::types::Value::from(precursor_id)];
-    params.extend(run_ids.iter().cloned());
+    let mut params_values: Vec<rusqlite::types::Value> = vec![rusqlite::types::Value::from(precursor_id)];
+    params_values.extend(run_ids.iter().cloned());
 
         // log::debug!("SQL Query: {}", sql_query);
 
@@ -1509,8 +1509,10 @@ impl OswAccess {
             f64,
             Option<i32>,
             Option<f64>,
-        )> = stmt
-            .query_map(rusqlite::params_from_iter(params.iter()), |row| {  // Use params_from_iter
+        )> = {
+            // Create a slice of &dyn ToSql referencing the values in params_values
+            let params_refs: Vec<&dyn rusqlite::ToSql> = params_values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+            stmt.query_map(params_refs.as_slice(), |row| {  // Use referenced params slice
                 let filename: String = row.get(0)?;
                 let run_id: i64 = row.get(1)?;
                 let precursor_id: i32 = row.get(2)?;
@@ -1522,13 +1524,13 @@ impl OswAccess {
 
                 // Optional fields (if SCORE_MS2 exists)
                 let rank_option = if score_ms2_exists {
-                    Some(row.get::<_, i32>(8)?)
+                    row.get::<_, Option<i32>>(8)?
                 } else {
                     None
                 };
 
                 let qvalue_option = if score_ms2_exists {
-                    Some(row.get::<_, f64>(9)?)
+                    row.get::<_, Option<f64>>(9)?
                 } else {
                     None
                 };
@@ -1546,7 +1548,8 @@ impl OswAccess {
                     qvalue_option,
                 ))
             })?
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()?
+        };
 
         // Collect results into FeatureData structs grouped by filename (run)
         let mut feature_data_map: HashMap<String, FeatureData> = HashMap::new();
@@ -1903,7 +1906,10 @@ impl OswAccess {
             "#);
         
             if score_ms2_exists {
-                sql_query.push_str(" INNER JOIN SCORE_MS2 ON SCORE_MS2.FEATURE_ID = FEATURE.ID");
+                // Use LEFT JOIN for SCORE_MS2 so that FEATURE rows without an MS2 score
+                // are not excluded when the SCORE_MS2 table exists. We read rank/qvalue
+                // as optional values further down.
+                sql_query.push_str(" LEFT JOIN SCORE_MS2 ON SCORE_MS2.FEATURE_ID = FEATURE.ID");
             }
         
             sql_query.push_str(" WHERE FEATURE.PRECURSOR_ID IN (");
@@ -2108,12 +2114,26 @@ impl OswAccess {
                 match conn.prepare(&sql_no_run) {
                     Ok(mut stmt_no_run) => {
                         let prec_params: Vec<rusqlite::types::Value> = precursor_ids_chunk.iter().map(|&id| rusqlite::types::Value::from(id)).collect();
-                        match stmt_no_run.query_map(rusqlite::params_from_iter(prec_params.iter()), |row| {
+                        let prec_params_refs: Vec<&dyn rusqlite::ToSql> = prec_params.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+                        match stmt_no_run.query_map(prec_params_refs.as_slice(), |row| {
                             Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?, row.get::<_, f64>(2)?))
                         }) {
                             Ok(mapped) => {
                                 let rows_sample: Vec<_> = mapped.collect::<Result<Vec<_>, _>>().unwrap_or_default();
                                 log::trace!("Retry without RUN filter returned {} rows (sample up to 10): {:?}", rows_sample.len(), rows_sample);
+                                // If still zero, probe a few individual precursor IDs to see whether
+                                // single-parameter queries return rows. This will differentiate
+                                // between an IN-list binding issue and truly missing rows.
+                                if rows_sample.is_empty() {
+                                    let probe_count = precursor_ids_chunk.len().min(8);
+                                    for &pid in precursor_ids_chunk.iter().take(probe_count) {
+                                        let probe_sql = "SELECT COUNT(*) FROM FEATURE WHERE PRECURSOR_ID = ?1";
+                                        match conn.query_row(probe_sql, rusqlite::params![pid], |r| r.get::<_, i64>(0)) {
+                                            Ok(cnt) => log::trace!("Probe PRECURSOR_ID={} -> FEATURE rows: {}", pid, cnt),
+                                            Err(e) => log::trace!("Probe PRECURSOR_ID={} -> query failed: {}", pid, e.to_string()),
+                                        }
+                                    }
+                                }
                             }
                             Err(e) => {
                                 log::trace!("Diagnostic query (no RUN filter) failed: {}", e.to_string());
