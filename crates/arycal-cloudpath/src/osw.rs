@@ -1922,26 +1922,25 @@ impl OswAccess {
             sql_query.push_str(&format!(" WHERE FEATURE.PRECURSOR_ID IN ({})", prec_list));
         
                 if !basenames_vec.is_empty() {
-                    // Only include basenames that actually resolved to RUN entries to avoid building
-                    // extremely long OR lists for basenames that do not exist in the DB.
-                    let resolved_basenames: Vec<String> = basenames_vec.iter()
-                        .filter(|b| self.filename_to_id.contains_key(*b))
-                        .cloned()
-                        .collect();
+                    // Only include basenames that actually resolved to RUN entries. Prefer
+                    // exact RUN.ID matching (parameterized) instead of substring matching
+                    // on filenames; basenames may not reliably appear as substrings of
+                    // RUN.FILENAME and substring matching produced false negatives in
+                    // practice. run_ids preserves runtime types (Integer/Text/Blob) so
+                    // we bind them as parameters here.
+                    let resolved_run_values: Vec<rusqlite::types::Value> = run_ids.clone();
 
-                    if !resolved_basenames.is_empty() {
-                        // Use filename-based matching (FILENAME LIKE '%basename%') instead of binding RUN.ID.
-                        // Escape single quotes for SQL string literals
-                        let mut run_filter = String::new();
-                        for b in &resolved_basenames {
-                            let esc = b.replace('\'', "''");
-                            run_filter.push_str(&format!("FILENAME LIKE '%{}%' OR ", esc));
-                        }
-                        // Remove trailing ' OR '
-                        run_filter.truncate(run_filter.len().saturating_sub(4));
-                        sql_query.push_str(&format!(" AND ({})", run_filter));
+                    if !resolved_run_values.is_empty() {
+                        // Build placeholders for the RUN.ID IN (...) clause and we will
+                        // bind the run_ids values as parameters when executing the query.
+                        let run_placeholders = resolved_run_values.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                        sql_query.push_str(&format!(" AND RUN.ID IN ({})", run_placeholders));
+
+                        // We'll bind these run_id values (as rusqlite::types::Value) when
+                        // executing the statement below. To keep params ordering clear,
+                        // we will attach them to params_refs at execution time.
                     } else {
-                        log::trace!("No requested basenames resolved to RUN entries; skipping run filename filter for this chunk");
+                        log::trace!("No requested basenames resolved to RUN entries; skipping RUN.ID filter for this chunk");
                     }
                 }
         
