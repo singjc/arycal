@@ -1976,7 +1976,9 @@ impl OswAccess {
             log::trace!("Executing feature fetch SQL (raw): {}\nwith params: {:?}", sql_query, param_display);
         
             // Process results
-            let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
+            // Build a slice of &dyn ToSql referencing the values in params so binding is unambiguous
+            let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+            let rows = stmt.query_map(params_refs.as_slice(), |row| {
                 let filename: String = row.get(0)?;
                 let run_id: i64 = row.get(1)?;
                 let precursor_id: i32 = row.get(2)?;
