@@ -1859,12 +1859,24 @@ impl OswAccess {
             |row| row.get(0),
         ).unwrap_or(false);
         
-        const BATCH_SIZE: usize = 5000;
-        
+        // SQLite has a default maximum number of host parameters (SQL variables) of 999.
+        // Ensure we don't create a query with more placeholders than allowed by splitting
+        // the precursor list into safe-sized chunks: max_vars - run_ids.len().
+        const SQLITE_MAX_VARS: usize = 999;
+
         let mut feature_data_map: HashMap<i32, HashMap<String, FeatureData>> = HashMap::new();
-        
-        // Process precursor IDs in batches
-        for precursor_ids_chunk in precursor_ids.chunks(BATCH_SIZE) {
+
+        // Calculate safe chunk size for precursor IDs given the number of run_id params
+        let safe_chunk_size = if run_ids.len() >= SQLITE_MAX_VARS {
+            // Defensive: if run_ids alone exceed the limit, fall back to a small chunk and log
+            log::warn!("Number of run_ids ({}) exceeds SQLITE_MAX_VARS ({}). Queries may fail.", run_ids.len(), SQLITE_MAX_VARS);
+            1_usize
+        } else {
+            SQLITE_MAX_VARS - run_ids.len()
+        };
+
+        // Process precursor IDs in batches of safe_chunk_size
+        for precursor_ids_chunk in precursor_ids.chunks(safe_chunk_size) {
             // Build the query
             let mut sql_query = r#"
                 SELECT 
