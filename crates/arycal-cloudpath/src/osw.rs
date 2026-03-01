@@ -1455,7 +1455,7 @@ impl OswAccess {
         sql_query.push_str(
             r#"
             FROM FEATURE
-            INNER JOIN RUN ON RUN.ID = FEATURE.RUN_ID
+            INNER JOIN RUN ON CAST(RUN.ID AS TEXT) = CAST(FEATURE.RUN_ID AS TEXT)
             INNER JOIN PRECURSOR ON PRECURSOR.ID = FEATURE.PRECURSOR_ID
             INNER JOIN FEATURE_MS2 ON FEATURE_MS2.FEATURE_ID = FEATURE.ID
         "#,
@@ -1478,7 +1478,10 @@ impl OswAccess {
                 .map(|_| "?")
                 .collect::<Vec<_>>()
                 .join(",");
-            sql_query.push_str(&format!(" AND RUN.ID IN ({})", placeholders));
+            // Use a CAST to TEXT here as some RUN.ID values may be stored as
+            // BLOB containing ASCII digits. Comparing textual representations
+            // will match those RUN.ID values when we bind text parameters.
+            sql_query.push_str(&format!(" AND CAST(RUN.ID AS TEXT) IN ({})", placeholders));
         }
 
         // Order by EXP_RT
@@ -1902,7 +1905,7 @@ impl OswAccess {
         
             sql_query.push_str(r#"
                 FROM FEATURE
-                INNER JOIN RUN ON RUN.ID = FEATURE.RUN_ID
+                INNER JOIN RUN ON CAST(RUN.ID AS TEXT) = CAST(FEATURE.RUN_ID AS TEXT)
                 INNER JOIN PRECURSOR ON PRECURSOR.ID = FEATURE.PRECURSOR_ID
                 LEFT JOIN FEATURE_MS2 ON FEATURE_MS2.FEATURE_ID = FEATURE.ID
             "#);
@@ -1934,7 +1937,12 @@ impl OswAccess {
                         // Build placeholders for the RUN.ID IN (...) clause and we will
                         // bind the run_ids values as parameters when executing the query.
                         let run_placeholders = resolved_run_values.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-                        sql_query.push_str(&format!(" AND RUN.ID IN ({})", run_placeholders));
+                        // Some OSW files store RUN.ID as BLOB/TEXT containing ASCII
+                        // digits. Compare the textual representation of RUN.ID to the
+                        // bound parameters (which we will also provide as TEXT) so
+                        // comparisons succeed regardless of whether RUN.ID is stored
+                        // as BLOB or TEXT.
+                        sql_query.push_str(&format!(" AND CAST(RUN.ID AS TEXT) IN ({})", run_placeholders));
 
                         // We'll bind these run_id values (as rusqlite::types::Value) when
                         // executing the statement below. To keep params ordering clear,
@@ -1956,9 +1964,18 @@ impl OswAccess {
             // update the feature_data_map. This avoids mismatched closure types
             // when using different parameter slices.
             let feature_rows: Vec<(i32, String, i64, i64, f64, f64, f64, Option<f64>, Option<i32>, Option<f64>)> = if sql_query.contains("RUN.ID IN (") && !run_ids.is_empty() {
-                // Build owned values and a slice of &dyn ToSql referencing them
-                let params_values: Vec<rusqlite::types::Value> = run_ids.clone();
-                let params_refs: Vec<&dyn rusqlite::ToSql> = params_values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+                    // Convert run_ids to textual values so they match RUN.ID TEXT/ BLOB
+                    // representations in the DB (some RUN.ID fields are stored as BLOB
+                    // containing ASCII digits). We bind them as TEXT parameters.
+                    let params_values: Vec<rusqlite::types::Value> = run_ids.iter().map(|v| {
+                        match v {
+                            rusqlite::types::Value::Integer(i) => rusqlite::types::Value::Text(i.to_string()),
+                            rusqlite::types::Value::Text(s) => rusqlite::types::Value::Text(s.clone()),
+                            rusqlite::types::Value::Blob(b) => rusqlite::types::Value::Text(String::from_utf8_lossy(&b).to_string()),
+                            other => other.clone(),
+                        }
+                    }).collect();
+                    let params_refs: Vec<&dyn rusqlite::ToSql> = params_values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
                 stmt.query_map(params_refs.as_slice(), |row| {
                     let filename: String = row.get(0)?;
                     let run_id: i64 = row.get(1)?;
