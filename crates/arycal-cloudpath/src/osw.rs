@@ -1838,9 +1838,10 @@ impl OswAccess {
             log::trace!("Basenames requested but missing from RUN table: {:?}", missing_basenames);
         }
 
-        // Resolve RUN.ID values (preserve underlying Value type)
-        let run_ids = self.get_run_ids(&basenames_vec);
-        log::trace!("Requested basenames: {:?} -> Resolved run_ids: {:?}", basenames_vec, run_ids);
+    // Resolve RUN.ID values (preserve underlying Value type)
+    let run_ids = self.get_run_ids(&basenames_vec);
+    log::trace!("Requested basenames: {:?} -> Resolved run_ids: {:?}", basenames_vec, run_ids);
+    log::trace!("Unique basenames count: {}. Sample up to 10: {:?}", basenames_vec.len(), basenames_vec.iter().take(10).collect::<Vec<_>>());
 
         // Also log per-precursor resolution to aid debugging when a precursor lacks feature data
         for (prec_id, runs) in precursor_run_sets.iter() {
@@ -1916,9 +1917,9 @@ impl OswAccess {
                 // elsewhere in the codebase.
                 let mut run_filter = String::new();
                 for b in &basenames_vec {
-                    // Simple defensive escaping of double quotes
-                    let esc = b.replace('"', "\"");
-                    run_filter.push_str(&format!("FILENAME LIKE \"%{}%\" OR ", esc));
+                    // Escape single quotes for SQL string literals
+                    let esc = b.replace('\'', "''");
+                    run_filter.push_str(&format!("FILENAME LIKE '%{}%' OR ", esc));
                 }
                 if !run_filter.is_empty() {
                     // Remove trailing ' OR '
