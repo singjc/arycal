@@ -387,12 +387,28 @@ impl OswAccess {
 
         let rows = stmt.query_map([], |row| {
             let id_value = row.get::<_, rusqlite::types::Value>(0)?;
-            let filename = row.get::<_, String>(1)?;
-            Ok((id_value, filename))
+            // Read filename as a Value to handle TEXT or BLOB storage
+            let filename_value = row.get::<_, rusqlite::types::Value>(1)?;
+            Ok((id_value, filename_value))
         })?;
 
         for row in rows {
-            let (id_value, filename) = row?;
+            let (id_value, filename_value) = row?;
+            // Convert filename_value to String (handle Text or Blob)
+            let filename = match filename_value {
+                rusqlite::types::Value::Text(s) => s,
+                rusqlite::types::Value::Blob(b) => {
+                    let s = String::from_utf8_lossy(&b).to_string();
+                    log::trace!("RUN.FILENAME stored as BLOB; converted to string: {}", s);
+                    s
+                }
+                rusqlite::types::Value::Integer(i) => i.to_string(),
+                rusqlite::types::Value::Null => {
+                    log::warn!("RUN.FILENAME is NULL for an entry; skipping");
+                    continue;
+                }
+                rusqlite::types::Value::Real(f) => f.to_string(),
+            };
             let basename = Path::new(&filename)
                 .file_stem()
                 .and_then(|s| s.to_str())
