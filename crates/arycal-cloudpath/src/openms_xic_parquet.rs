@@ -227,6 +227,10 @@ impl ChromatogramReader for OpenMSXicParquetChromatogramReader {
             }
         }
 
+        // Debug: report how many groups/chromatograms were loaded
+        log::trace!("OpenMS parquet: loaded {} chromatograms across {} precursor groups from {}",
+            groups.values().map(|g| g.chromatograms.len()).sum::<usize>(), groups.len(), self.file);
+
         // Add metadata file & basename
         let basename = extract_basename(&self.file);
         let file_str = self.file.to_string();
