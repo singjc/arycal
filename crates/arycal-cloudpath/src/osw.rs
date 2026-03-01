@@ -393,7 +393,36 @@ impl OswAccess {
         })?;
 
         for row in rows {
-            let (id_value, filename_value) = row?;
+            let (raw_id_value, filename_value) = row?;
+            // Normalize ID values: if the ID is stored as TEXT or BLOB containing ASCII digits,
+            // convert it to an Integer Value so comparisons against FEATURE.RUN_ID (often stored as integers)
+            // will succeed.
+            let id_value = match raw_id_value {
+                rusqlite::types::Value::Blob(b) => {
+                    // Attempt to interpret as ASCII digits
+                    if b.iter().all(|&ch| (ch as char).is_ascii_digit()) {
+                        if let Ok(s) = String::from_utf8(b.clone()) {
+                            if let Ok(i) = s.parse::<i64>() {
+                                rusqlite::types::Value::Integer(i)
+                            } else {
+                                rusqlite::types::Value::Blob(b)
+                            }
+                        } else {
+                            rusqlite::types::Value::Blob(b)
+                        }
+                    } else {
+                        rusqlite::types::Value::Blob(b)
+                    }
+                }
+                rusqlite::types::Value::Text(s) => {
+                    if let Ok(i) = s.parse::<i64>() {
+                        rusqlite::types::Value::Integer(i)
+                    } else {
+                        rusqlite::types::Value::Text(s)
+                    }
+                }
+                other => other,
+            };
             // Convert filename_value to String (handle Text or Blob)
             let filename = match filename_value {
                 rusqlite::types::Value::Text(s) => s,
