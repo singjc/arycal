@@ -1914,9 +1914,12 @@ impl OswAccess {
                 sql_query.push_str(" LEFT JOIN SCORE_MS2 ON SCORE_MS2.FEATURE_ID = FEATURE.ID");
             }
         
-            sql_query.push_str(" WHERE FEATURE.PRECURSOR_ID IN (");
-            sql_query.push_str(&precursor_ids_chunk.iter().map(|_| "?").collect::<Vec<_>>().join(","));
-            sql_query.push_str(")");
+            // Build a literal comma-separated list of precursor IDs (integers) for the IN-list.
+            // Using a literal list avoids surprising parameter-binding behavior for large
+            // IN-lists and keeps the query simple: these values come from internal IDs
+            // (trusted integers) so it's safe to inline them.
+            let prec_list = precursor_ids_chunk.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+            sql_query.push_str(&format!(" WHERE FEATURE.PRECURSOR_ID IN ({})", prec_list));
         
                 if !basenames_vec.is_empty() {
                     // Only include basenames that actually resolved to RUN entries to avoid building
@@ -1947,46 +1950,12 @@ impl OswAccess {
             // Prepare and execute
             let mut stmt = conn.prepare(&sql_query)?;
 
-            // Build parameters - precursor_ids only (we match runs by filename LIKE, not by RUN.ID params)
-            let mut params: Vec<rusqlite::types::Value> = precursor_ids_chunk.iter()
-                .map(|&id| rusqlite::types::Value::from(id))
-                .collect();
+            // Diagnostic: log SQL for debugging. We inline the precursor IDs so there are
+            // no host parameters for the IN-list; this avoids surprises in parameter binding.
+            log::trace!("Executing feature fetch SQL: {}", sql_query);
 
-            // Diagnostic: log SQL and parameters at trace level to aid debugging missing rows
-            let param_display: Vec<String> = params
-                .iter()
-                .map(|v| match v {
-                    rusqlite::types::Value::Integer(i) => format!("Integer({})", i),
-                    rusqlite::types::Value::Real(f) => format!("Real({})", f),
-                    rusqlite::types::Value::Text(s) => format!("Text({})", s),
-                    rusqlite::types::Value::Blob(b) => format!("Blob(len={})", b.len()),
-                    rusqlite::types::Value::Null => "Null".to_string(),
-                })
-                .collect();
-
-            // Build a human-readable interpolated SQL for debugging by sequentially replacing
-            // each '?' with the corresponding parameter value (quoted for TEXT).
-            let mut interpolated = String::new();
-            let mut param_iter = param_display.iter();
-            for ch in sql_query.chars() {
-                if ch == '?' {
-                    if let Some(p) = param_iter.next() {
-                        interpolated.push_str(p);
-                    } else {
-                        interpolated.push('?');
-                    }
-                } else {
-                    interpolated.push(ch);
-                }
-            }
-
-            log::trace!("Executing feature fetch SQL (interpolated): {}", interpolated);
-            log::trace!("Executing feature fetch SQL (raw): {}\nwith params: {:?}", sql_query, param_display);
-        
-            // Process results
-            // Build a slice of &dyn ToSql referencing the values in params so binding is unambiguous
-            let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
-            let rows = stmt.query_map(params_refs.as_slice(), |row| {
+            // Process results - no bound params for the IN-list (we inlined the integers)
+            let rows = stmt.query_map([], |row| {
                 let filename: String = row.get(0)?;
                 let run_id: i64 = row.get(1)?;
                 let precursor_id: i32 = row.get(2)?;
@@ -2115,18 +2084,17 @@ impl OswAccess {
                 log::trace!("No rows returned for chunk - retrying without RUN.ID filter to diagnose cause");
 
                 // Build a simple query that omits the RUN.ID IN (...) clause and returns a small sample
-                let mut prec_placeholders = precursor_ids_chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                let prec_list = precursor_ids_chunk.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
                 let sql_no_run = format!(
                     "SELECT FEATURE.PRECURSOR_ID, FILENAME, EXP_RT FROM FEATURE INNER JOIN RUN ON RUN.ID = FEATURE.RUN_ID WHERE FEATURE.PRECURSOR_ID IN ({}) ORDER BY FEATURE.PRECURSOR_ID LIMIT 10",
-                    prec_placeholders
+                    prec_list
                 );
 
                 // Prepare and execute the diagnostic query
                 match conn.prepare(&sql_no_run) {
                     Ok(mut stmt_no_run) => {
-                        let prec_params: Vec<rusqlite::types::Value> = precursor_ids_chunk.iter().map(|&id| rusqlite::types::Value::from(id)).collect();
-                        let prec_params_refs: Vec<&dyn rusqlite::ToSql> = prec_params.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
-                        match stmt_no_run.query_map(prec_params_refs.as_slice(), |row| {
+                        // No bound params needed because we inlined the precursor list
+                        match stmt_no_run.query_map([], |row| {
                             Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?, row.get::<_, f64>(2)?))
                         }) {
                             Ok(mapped) => {
