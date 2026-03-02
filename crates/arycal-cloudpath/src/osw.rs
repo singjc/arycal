@@ -453,7 +453,7 @@ impl OswAccess {
                 rusqlite::types::Value::Text(s) => s,
                 rusqlite::types::Value::Blob(b) => {
                     let s = String::from_utf8_lossy(&b).to_string();
-                    log::trace!("RUN.FILENAME stored as BLOB; converted to string: {}", s);
+                    log::debug!("RUN.FILENAME stored as BLOB; converted to string: {}", s);
                     s
                 }
                 rusqlite::types::Value::Integer(i) => i.to_string(),
@@ -479,7 +479,7 @@ impl OswAccess {
             filename_to_id.insert(basename, id_value);
         }
 
-        log::trace!("Loaded RUN table with {} entries", filename_to_id.len());
+    log::debug!("Loaded RUN table with {} entries", filename_to_id.len());
 
         Ok(filename_to_id)
     }
@@ -994,7 +994,7 @@ impl OswAccess {
 
         // Append condition for filtering by precursor IDs if applicable
         let query = if let Some(ids) = precursor_ids {
-            log::trace!("Filtering for {} precursor IDs", ids.len());
+            log::debug!("Filtering for {} precursor IDs", ids.len());
             let id_list = ids
                 .iter()
                 .map(|id| id.to_string())
@@ -1453,7 +1453,7 @@ impl OswAccess {
 
         // Convert basenames to RUN_IDs
         let run_ids = self.get_run_ids(&runs);
-        log::trace!("RUN_IDs: {:?}", run_ids);
+        log::debug!("RUN_IDs: {:?}", run_ids);
 
         // Start building the SQL query
         let mut sql_query = r#"
@@ -1518,7 +1518,7 @@ impl OswAccess {
         // Order by EXP_RT
         sql_query.push_str(" ORDER BY FILENAME, EXP_RT");
 
-        log::trace!("SQL Query: {}", sql_query);
+    log::debug!("SQL Query: {}", sql_query);
 
         // Prepare and execute the SQL query
         let mut stmt = conn
@@ -1873,21 +1873,21 @@ impl OswAccess {
             .cloned()
             .collect();
         if !missing_basenames.is_empty() {
-            log::trace!("Basenames requested but missing from RUN table: {:?}", missing_basenames);
+            log::debug!("Basenames requested but missing from RUN table: {:?}", missing_basenames);
         }
 
     // Resolve RUN.ID values (preserve underlying Value type)
     let run_ids = self.get_run_ids(&basenames_vec);
-    log::trace!("Requested basenames: {:?} -> Resolved run_ids: {:?}", basenames_vec, run_ids);
-    log::trace!("Unique basenames count: {}. Sample up to 10: {:?}", basenames_vec.len(), basenames_vec.iter().take(10).collect::<Vec<_>>());
+    log::debug!("Requested basenames: {:?} -> Resolved run_ids: {:?}", basenames_vec, run_ids);
+    log::debug!("Unique basenames count: {}. Sample up to 10: {:?}", basenames_vec.len(), basenames_vec.iter().take(10).collect::<Vec<_>>());
 
         // Also log per-precursor resolution to aid debugging when a precursor lacks feature data
         for (prec_id, runs) in precursor_run_sets.iter() {
             let resolved = self.get_run_ids(&runs.clone());
             if resolved.is_empty() {
-                log::trace!("Precursor {}: requested runs {:?} -> resolved run_ids []", prec_id, runs);
+                log::debug!("Precursor {}: requested runs {:?} -> resolved run_ids []", prec_id, runs);
             } else {
-                log::trace!("Precursor {}: requested runs {:?} -> resolved run_ids {:?}", prec_id, runs, resolved);
+                log::debug!("Precursor {}: requested runs {:?} -> resolved run_ids {:?}", prec_id, runs, resolved);
             }
         }
         
@@ -1984,7 +1984,7 @@ impl OswAccess {
                         // executing the statement below. To keep params ordering clear,
                         // we will attach them to params_refs at execution time.
                     } else {
-                        log::trace!("No requested basenames resolved to RUN entries; skipping RUN.ID filter for this chunk");
+                        log::debug!("No requested basenames resolved to RUN entries; skipping RUN.ID filter for this chunk");
                     }
                 }
         
@@ -1994,7 +1994,7 @@ impl OswAccess {
             let mut stmt = conn.prepare(&sql_query)?;
 
             // Diagnostic: log SQL for debugging.
-            log::trace!("Executing feature fetch SQL: {}", sql_query);
+            log::debug!("Executing feature fetch SQL: {}", sql_query);
 
             // Process results - collect into a Vec of tuples so we can iterate and
             // update the feature_data_map. This avoids mismatched closure types
@@ -2142,12 +2142,12 @@ impl OswAccess {
             }
 
             // Diagnostic: report how many rows were returned and which precursors were found
-            log::trace!("Feature fetch returned {} rows for precursor chunk (precursors seen: {})", rows_processed, precursors_seen.len());
+            log::debug!("Feature fetch returned {} rows for precursor chunk (precursors seen: {})", rows_processed, precursors_seen.len());
             // Log any precursors in the requested chunk that were not seen in the results
             let requested_precursors: Vec<i32> = precursor_ids_chunk.iter().cloned().collect();
             let missing_precursors: Vec<i32> = requested_precursors.into_iter().filter(|p| !precursors_seen.contains(p)).collect();
             if !missing_precursors.is_empty() {
-                log::trace!("Requested precursor IDs missing from query results: {:?}", missing_precursors);
+                log::debug!("Requested precursor IDs missing from query results: {:?}", missing_precursors);
             }
 
             // If no rows were returned for this chunk, retry a simplified query without the RUN.ID filter
@@ -2155,7 +2155,7 @@ impl OswAccess {
             // returns zero, fall back to per-precursor small-batch fetches and populate the map so
             // the rest of the pipeline can proceed (this is slower but safe).
             if rows_processed == 0 {
-                log::trace!("No rows returned for chunk - retrying without RUN.ID filter to diagnose cause");
+                log::debug!("No rows returned for chunk - retrying without RUN.ID filter to diagnose cause");
 
                 // Build a simple query that omits the RUN.ID IN (...) clause and returns a small sample
                 let prec_list = precursor_ids_chunk.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
@@ -2175,7 +2175,7 @@ impl OswAccess {
                         }) {
                             Ok(mapped) => {
                                 let rows_sample: Vec<_> = mapped.collect::<Result<Vec<_>, _>>().unwrap_or_default();
-                                log::trace!("Retry without RUN filter returned {} rows (sample up to 10): {:?}", rows_sample.len(), rows_sample);
+                                log::debug!("Retry without RUN filter returned {} rows (sample up to 10): {:?}", rows_sample.len(), rows_sample);
                                 // If still zero, probe a few individual precursor IDs to see whether
                                 // single-parameter queries return rows. This will differentiate
                                 // between an IN-list binding issue and truly missing rows.
@@ -2184,14 +2184,14 @@ impl OswAccess {
                                     for &pid in precursor_ids_chunk.iter().take(probe_count) {
                                         let probe_sql = "SELECT COUNT(*) FROM FEATURE WHERE PRECURSOR_ID = ?1";
                                         match conn.query_row(probe_sql, rusqlite::params![pid], |r| r.get::<_, i64>(0)) {
-                                            Ok(cnt) => log::trace!("Probe PRECURSOR_ID={} -> FEATURE rows: {}", pid, cnt),
-                                            Err(e) => log::trace!("Probe PRECURSOR_ID={} -> query failed: {}", pid, e.to_string()),
+                                            Ok(cnt) => log::debug!("Probe PRECURSOR_ID={} -> FEATURE rows: {}", pid, cnt),
+                                            Err(e) => log::debug!("Probe PRECURSOR_ID={} -> query failed: {}", pid, e.to_string()),
                                         }
                                     }
 
                                     // As a last-resort recovery: fetch each precursor individually in small batches
                                     // and insert their rows into feature_data_map so downstream code can proceed.
-                                    log::trace!("Falling back to per-precursor fetch for {} precursors", precursor_ids_chunk.len());
+                                    log::debug!("Falling back to per-precursor fetch for {} precursors", precursor_ids_chunk.len());
                                     for &pid in precursor_ids_chunk.iter() {
                                         let single_sql = "SELECT FILENAME, RUN.ID AS RUN_ID, FEATURE.PRECURSOR_ID, FEATURE.ID AS FEATURE_ID, EXP_RT, LEFT_WIDTH, RIGHT_WIDTH, FEATURE_MS2.AREA_INTENSITY AS INTENSITY FROM FEATURE INNER JOIN RUN ON RUN.ID = FEATURE.RUN_ID LEFT JOIN FEATURE_MS2 ON FEATURE_MS2.FEATURE_ID = FEATURE.ID WHERE FEATURE.PRECURSOR_ID = ?1 ORDER BY EXP_RT";
                                         match conn.prepare(single_sql) {
