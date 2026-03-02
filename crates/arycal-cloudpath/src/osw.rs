@@ -159,6 +159,20 @@ fn value_to_string(v: rusqlite::types::Value) -> String {
     }
 }
 
+/// Convert a rusqlite Value into an i64 for RUN_ID columns.
+fn value_to_i64_for_row(index: usize, name: &str, v: rusqlite::types::Value) -> rusqlite::Result<i64> {
+    match v {
+        rusqlite::types::Value::Integer(i) => Ok(i),
+    rusqlite::types::Value::Text(s) => s.parse::<i64>().map_err(|_| rusqlite::Error::InvalidColumnType(index, name.to_string(), rusqlite::types::Type::Integer)),
+        rusqlite::types::Value::Blob(b) => {
+            let s = String::from_utf8_lossy(&b).to_string();
+            s.parse::<i64>().map_err(|_| rusqlite::Error::InvalidColumnType(index, name.to_string(), rusqlite::types::Type::Integer))
+        }
+        rusqlite::types::Value::Real(f) => Ok(f as i64),
+    rusqlite::types::Value::Null => Err(rusqlite::Error::InvalidColumnType(index, name.to_string(), rusqlite::types::Type::Integer)),
+    }
+}
+
 /// Struct to store feature data for a precursor in a single run i.e. identified peaks, and peak boundaries.
 #[derive(Debug, Clone, Serialize, Deserialize, DeepSizeOf )]
 pub struct FeatureData {
@@ -1292,7 +1306,8 @@ impl OswAccess {
             .query_map(params![], |row| {
                 let filename_value = row.get::<_, rusqlite::types::Value>(0)?;
                 let filename = value_to_string(filename_value);
-                let run_id: i64 = row.get(1)?;
+                let run_id_value = row.get::<_, rusqlite::types::Value>(1)?;
+                let run_id: i64 = value_to_i64_for_row(1, "RUN_ID", run_id_value)?;
                 let precursor_id: i32 = row.get(2)?;
                 let exp_rt: f64 = row.get(3)?;
 
@@ -1396,7 +1411,8 @@ impl OswAccess {
             .query_map(params![], |row| {
                 let filename_value = row.get::<_, rusqlite::types::Value>(0)?;
                 let filename = value_to_string(filename_value);
-                let run_id: i64 = row.get(1)?;
+                let run_id_value = row.get::<_, rusqlite::types::Value>(1)?;
+                let run_id: i64 = value_to_i64_for_row(1, "RUN_ID", run_id_value)?;
                 let precursor_id: i32 = row.get(2)?;
                 let exp_rt: f64 = row.get(3)?;
 
@@ -1999,7 +2015,8 @@ impl OswAccess {
                 stmt.query_map(params_refs.as_slice(), |row| {
                     let filename_value = row.get::<_, rusqlite::types::Value>(0)?;
                     let filename = value_to_string(filename_value);
-                    let run_id: i64 = row.get(1)?;
+                    let run_id_value = row.get::<_, rusqlite::types::Value>(1)?;
+                    let run_id: i64 = value_to_i64_for_row(1, "RUN_ID", run_id_value)?;
                     let precursor_id: i32 = row.get(2)?;
                     let feature_id: i64 = row.get(3)?;
                     let exp_rt: f64 = row.get(4)?;
@@ -2025,7 +2042,8 @@ impl OswAccess {
                 stmt.query_map([], |row| {
                     let filename_value = row.get::<_, rusqlite::types::Value>(0)?;
                     let filename = value_to_string(filename_value);
-                    let run_id: i64 = row.get(1)?;
+                    let run_id_value = row.get::<_, rusqlite::types::Value>(1)?;
+                    let run_id: i64 = value_to_i64_for_row(1, "RUN_ID", run_id_value)?;
                     let precursor_id: i32 = row.get(2)?;
                     let feature_id: i64 = row.get(3)?;
                     let exp_rt: f64 = row.get(4)?;
