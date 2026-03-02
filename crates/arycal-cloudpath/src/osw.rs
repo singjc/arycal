@@ -148,6 +148,17 @@ fn extract_basename(filename: &str) -> String {
     stem
 }
 
+/// Convert a rusqlite Value into a String, handling Text, Blob and numeric types.
+fn value_to_string(v: rusqlite::types::Value) -> String {
+    match v {
+        rusqlite::types::Value::Text(s) => s,
+        rusqlite::types::Value::Blob(b) => String::from_utf8_lossy(&b).to_string(),
+        rusqlite::types::Value::Integer(i) => i.to_string(),
+        rusqlite::types::Value::Real(f) => f.to_string(),
+        rusqlite::types::Value::Null => String::new(),
+    }
+}
+
 /// Struct to store feature data for a precursor in a single run i.e. identified peaks, and peak boundaries.
 #[derive(Debug, Clone, Serialize, Deserialize, DeepSizeOf )]
 pub struct FeatureData {
@@ -617,7 +628,9 @@ impl OswAccess {
     
         let rows = stmt
             .query_map(params![modified_sequence, precursor_charge], |row| {
-                let run_basename = extract_basename(&row.get::<_, String>(0)?);
+                let filename_value = row.get::<_, rusqlite::types::Value>(0)?;
+                let filename = value_to_string(filename_value);
+                let run_basename = extract_basename(&filename);
                 Ok(PrecursorPeakBoundaries {
                     run_filename: run_basename,
                     alignment_group_id: row.get::<_, Option<i64>>(1)?,
@@ -1277,7 +1290,8 @@ impl OswAccess {
         // Execute the query and collect results into a vector of FeatureData
         let feature_data_iter = stmt
             .query_map(params![], |row| {
-                let filename: String = row.get(0)?;
+                let filename_value = row.get::<_, rusqlite::types::Value>(0)?;
+                let filename = value_to_string(filename_value);
                 let run_id: i64 = row.get(1)?;
                 let precursor_id: i32 = row.get(2)?;
                 let exp_rt: f64 = row.get(3)?;
@@ -1380,7 +1394,8 @@ impl OswAccess {
         // Execute the query and collect results into a vector of FeatureData
         let feature_data_iter = stmt
             .query_map(params![], |row| {
-                let filename: String = row.get(0)?;
+                let filename_value = row.get::<_, rusqlite::types::Value>(0)?;
+                let filename = value_to_string(filename_value);
                 let run_id: i64 = row.get(1)?;
                 let precursor_id: i32 = row.get(2)?;
                 let exp_rt: f64 = row.get(3)?;
@@ -1516,7 +1531,8 @@ impl OswAccess {
             // Create a slice of &dyn ToSql referencing the values in params_values
             let params_refs: Vec<&dyn rusqlite::ToSql> = params_values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
             stmt.query_map(params_refs.as_slice(), |row| {  // Use referenced params slice
-                let filename: String = row.get(0)?;
+                let filename_value = row.get::<_, rusqlite::types::Value>(0)?;
+                let filename = value_to_string(filename_value);
                 let run_id: i64 = row.get(1)?;
                 let precursor_id: i32 = row.get(2)?;
                 let feature_id: i64 = row.get(3)?;
@@ -1981,7 +1997,8 @@ impl OswAccess {
                     }).collect();
                     let params_refs: Vec<&dyn rusqlite::ToSql> = params_values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
                 stmt.query_map(params_refs.as_slice(), |row| {
-                    let filename: String = row.get(0)?;
+                    let filename_value = row.get::<_, rusqlite::types::Value>(0)?;
+                    let filename = value_to_string(filename_value);
                     let run_id: i64 = row.get(1)?;
                     let precursor_id: i32 = row.get(2)?;
                     let feature_id: i64 = row.get(3)?;
@@ -2006,7 +2023,8 @@ impl OswAccess {
                 })?.collect::<Result<Vec<_>, _>>()?
             } else {
                 stmt.query_map([], |row| {
-                    let filename: String = row.get(0)?;
+                    let filename_value = row.get::<_, rusqlite::types::Value>(0)?;
+                    let filename = value_to_string(filename_value);
                     let run_id: i64 = row.get(1)?;
                     let precursor_id: i32 = row.get(2)?;
                     let feature_id: i64 = row.get(3)?;
@@ -2133,7 +2151,9 @@ impl OswAccess {
                     Ok(mut stmt_no_run) => {
                         // No bound params needed because we inlined the precursor list
                         match stmt_no_run.query_map([], |row| {
-                            Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?, row.get::<_, f64>(2)?))
+                            let filename_value = row.get::<_, rusqlite::types::Value>(1)?;
+                            let filename = value_to_string(filename_value);
+                            Ok((row.get::<_, i32>(0)?, filename, row.get::<_, f64>(2)?))
                         }) {
                             Ok(mapped) => {
                                 let rows_sample: Vec<_> = mapped.collect::<Result<Vec<_>, _>>().unwrap_or_default();
@@ -2159,8 +2179,10 @@ impl OswAccess {
                                         match conn.prepare(single_sql) {
                                             Ok(mut s) => {
                                                 match s.query_map(rusqlite::params![pid], |row| {
+                                                    let filename_value = row.get::<_, rusqlite::types::Value>(0)?;
+                                                    let filename = value_to_string(filename_value);
                                                     Ok((
-                                                        row.get::<_, String>(0)?,
+                                                        filename,
                                                         row.get::<_, i64>(1)?,
                                                         row.get::<_, i32>(2)?,
                                                         row.get::<_, i64>(3)?,
