@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "arycal"
-version = "0.2.1"
+version = "0.2.2"
 description = "Across Run dYnamic Chromatogram ALignment - A Rust-based tool for aligning extracted ion chromatograms (EICs) across multiple runs"
 readme = "README.md"
 requires-python = ">=3.8"
