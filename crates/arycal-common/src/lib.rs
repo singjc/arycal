@@ -9,6 +9,7 @@ use deepsize::DeepSizeOf;
 pub mod config;
 pub mod error;
 pub mod chromatogram;
+pub mod savgol;
 
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, DeepSizeOf)]

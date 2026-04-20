@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result as AnyHowResult};
 use std::collections::HashMap;
 use std::collections::BTreeSet;
 use ordered_float::OrderedFloat;
-use savgol_rs::{savgol_filter, SavGolInput};
+use crate::savgol;
 use serde::{Serialize, Deserialize};
 use deepsize::DeepSizeOf;
 
@@ -116,14 +116,8 @@ impl Chromatogram {
             return Err(anyhow!("Polynomial order must be less than window length"));
         }
 
-        let input = SavGolInput {
-            data: &self.intensities,
-            window_length,
-            poly_order,
-            derivative: 0, // We're not calculating derivatives, just smoothing
-        };
-
-        savgol_filter(&input).map_err(|e| anyhow!("Savitzky-Golay smoothing failed: {}", e))
+        savgol::savgol_filter(&self.intensities, window_length, poly_order)
+            .map_err(|e| anyhow!("Savitzky-Golay smoothing failed: {}", e))
     }
 
     /// Normalizes the intensities using min-max normalization.
