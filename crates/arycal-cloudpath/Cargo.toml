@@ -15,7 +15,6 @@ r2d2_sqlite = "0.26.0" # SQLite connection manager for r2d2
 flate2 = "1.0"     # For compression (if needed)
 bytemuck = "1.7"
 ordered-float = "5.0.0"
-savgol-rs = "0.1.0"
 anyhow = "1.0"
 csv = "1.1.6"
 deepsize = "0.2.0"

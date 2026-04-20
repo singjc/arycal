@@ -8,5 +8,5 @@ anyhow = "1.0"
 thiserror = "2.0.12"
 serde = { version = "1.0", features = ["derive"] }
 ordered-float = "5.0.0"
-savgol-rs = "0.1.0"
+ndarray = "0.15"
 deepsize = "0.2.0"
