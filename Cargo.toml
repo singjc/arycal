@@ -13,3 +13,7 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 debug = true
+
+# Patch anymap to work with Rust 1.86.0+
+[patch.crates-io]
+anymap = { git = "https://github.com/chris-morgan/anymap.git", branch = "master" }
