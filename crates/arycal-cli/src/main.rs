@@ -9,7 +9,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 #[cfg(not(target_os = "windows"))]
-use rlimit::{Resource, setrlimit};
+use rlimit::{getrlimit, setrlimit, Resource};
 use arycal_common::config::{AlignmentConfig, FeaturesConfig, FiltersConfig, XicConfig};
 
 fn generate_config_template(path: &str) -> Result<()> {
@@ -101,29 +101,58 @@ fn generate_config_template(path: &str) -> Result<()> {
     Ok(())
 }
 
-fn increase_limits() -> Result<(), anyhow::Error> {
+fn increase_limits() {
     #[cfg(not(target_os = "windows"))]
     {
-        // Increase file descriptor limit (Unix only)
-        setrlimit(Resource::NOFILE, 65536, 65536)?;
+        let desired = 65536;
+
+        match getrlimit(Resource::NOFILE) {
+            Ok((soft, hard)) => {
+                let new_soft = desired.min(hard);
+
+                if new_soft > soft {
+                    match setrlimit(Resource::NOFILE, new_soft, hard) {
+                        Ok(_) => {
+                            log::debug!(
+                                "Raised file descriptor soft limit from {} to {}; hard limit is {}",
+                                soft,
+                                new_soft,
+                                hard
+                            );
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "Could not raise file descriptor limit from {} to {}: {}. Continuing.",
+                                soft,
+                                new_soft,
+                                e
+                            );
+                        }
+                    }
+                } else {
+                    log::debug!(
+                        "File descriptor limit already sufficient: soft={}, hard={}",
+                        soft,
+                        hard
+                    );
+                }
+            }
+            Err(e) => {
+                log::warn!("Could not read file descriptor limit: {}. Continuing.", e);
+            }
+        }
     }
-    #[cfg(target_os = "windows")]
-    {
-        // Windows equivalent or no-op
-        // Windows handles file descriptors differently
-        log::warn!("File descriptor limits not adjustable on Windows. This may mean you can only process a limited number of files.");
-    }
-    Ok(())
 }
 
 fn main() -> Result<()> {
-    increase_limits()?;
-    
     // Initialize logger
     env_logger::Builder::default()
         .filter_level(log::LevelFilter::Error)
         .parse_env(env_logger::Env::default().filter_or("ARYCAL_LOG", "error,arycal=info"))
         .init();
+
+    // Try to increase limit, but do not crash if cluster policy disallows it
+    increase_limits();
 
     // Define CLI arguments
     let matches = Command::new("arycal")
