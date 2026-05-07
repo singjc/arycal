@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.4
 
 # ─── Stage 1: compile arycal on the same old base as runtime ─────────────
-FROM rust:1.85.0-slim-bullseye AS builder
+FROM rust:1.86-slim-bullseye AS builder
 
 WORKDIR /app
 

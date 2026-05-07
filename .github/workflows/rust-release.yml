@@ -40,7 +40,7 @@ jobs:
               cp target/release/arycal artifacts/arycal
               cp target/release/arycal-debug-alignment artifacts/arycal-debug-alignment
 
-          # CLI: fully static musl via cross (with Rust 1.85.0 in container)
+          # CLI: fully static musl via cross (with Rust 1.86.0 in container)
           - name: x86_64-linux-musl
             bin: arycal
             target: x86_64-unknown-linux-musl
