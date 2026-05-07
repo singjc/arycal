@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -14,11 +14,12 @@ use serde::Serialize;
 const SVG_WIDTH: usize = 1600;
 const LEFT_MARGIN: f64 = 210.0;
 const RIGHT_MARGIN: f64 = 40.0;
-const TOP_MARGIN: f64 = 70.0;
+const TOP_MARGIN: f64 = 96.0;
 const BOTTOM_MARGIN: f64 = 50.0;
 const LANE_HEIGHT: f64 = 64.0;
 const LANE_GAP: f64 = 20.0;
 const MAX_POINTS_PER_TRACE: usize = 1500;
+const MAX_LINK_PLOT_TRANSITIONS: usize = 6;
 
 #[derive(Debug, Serialize)]
 struct PrecursorDebugSummary {
@@ -171,6 +172,7 @@ fn main() -> Result<()> {
             &precursor_out.join("peak_mapping_links.svg"),
             precursor,
             &raw_groups,
+            xics,
             aligned,
             &features,
             &result.detecting_peak_mappings,
@@ -789,6 +791,7 @@ fn write_peak_mapping_links_svg(
     path: &Path,
     precursor: &PrecursorIdData,
     raw_groups: &[TransitionGroup],
+    xics: &PrecursorXics,
     aligned: &AlignedTics,
     features: &[FeatureData],
     mappings: &HashMap<String, Vec<PeakMapping>>,
@@ -833,6 +836,8 @@ fn write_peak_mapping_links_svg(
 
     let smoothed_traces_by_run = smoothed_transition_trace_map(
         raw_groups,
+        xics,
+        &reference_run,
         input.alignment.smoothing.sgolay_window,
         input.alignment.smoothing.sgolay_order,
     );
@@ -1041,14 +1046,23 @@ fn smoothed_tic_map(xics: &PrecursorXics) -> HashMap<String, arycal_common::chro
 
 fn smoothed_transition_trace_map(
     raw_groups: &[TransitionGroup],
+    xics: &PrecursorXics,
+    reference_run: &str,
     sgolay_window: usize,
     sgolay_order: usize,
 ) -> HashMap<String, Vec<Chromatogram>> {
+    let selected_native_ids = select_link_plot_native_ids(raw_groups, xics, reference_run);
+
     raw_groups
         .iter()
         .filter_map(|group| {
             let basename = group.metadata.get("basename")?.clone();
-            let mut traces: Vec<_> = group.chromatograms.values().cloned().collect();
+            let mut traces: Vec<_> = group
+                .chromatograms
+                .iter()
+                .filter(|(native_id, _)| selected_native_ids.contains(*native_id))
+                .map(|(_, chrom)| chrom.clone())
+                .collect();
             traces.sort_by_key(|chrom| chrom.native_id.clone());
 
             let smoothed_traces = traces
@@ -1062,6 +1076,67 @@ fn smoothed_transition_trace_map(
             Some((basename, smoothed_traces))
         })
         .collect()
+}
+
+fn select_link_plot_native_ids(
+    raw_groups: &[TransitionGroup],
+    xics: &PrecursorXics,
+    reference_run: &str,
+) -> Vec<String> {
+    let raw_fragment_ids: Vec<String> = xics
+        .native_ids
+        .iter()
+        .filter(|native_id| !native_id.contains("_Precursor_"))
+        .cloned()
+        .collect();
+
+    let Some(reference_group) = raw_groups
+        .iter()
+        .find(|group| group.metadata.get("basename").map(|run| run == reference_run).unwrap_or(false))
+    else {
+        return raw_fragment_ids
+            .into_iter()
+            .take(MAX_LINK_PLOT_TRANSITIONS)
+            .collect();
+    };
+
+    let group_keys: HashSet<String> = reference_group.chromatograms.keys().cloned().collect();
+    let fragment_ids: Vec<String> = raw_fragment_ids
+        .into_iter()
+        .filter_map(|native_id| {
+            if group_keys.contains(&native_id) {
+                Some(native_id)
+            } else {
+                let openms_native_id = format!("transition:{native_id}");
+                if group_keys.contains(&openms_native_id) {
+                    Some(openms_native_id)
+                } else {
+                    None
+                }
+            }
+        })
+        .collect();
+
+    let mut ranked_ids: Vec<(String, f64)> = fragment_ids
+        .into_iter()
+        .filter_map(|native_id| {
+            let chromatogram = reference_group.chromatograms.get(&native_id)?;
+            let max_intensity = chromatogram
+                .intensities
+                .iter()
+                .copied()
+                .fold(0.0_f64, f64::max);
+            Some((native_id, max_intensity))
+        })
+        .collect();
+
+    ranked_ids.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.0.cmp(&b.0))
+    });
+    ranked_ids.truncate(MAX_LINK_PLOT_TRANSITIONS);
+    ranked_ids.into_iter().map(|(native_id, _)| native_id).collect()
 }
 
 fn extract_feature_boundaries(features: &[FeatureData], basename: &str) -> Vec<FeatureBoundary> {
@@ -1184,7 +1259,7 @@ fn write_svg(path: &Path, width: usize, height: usize, body: &str) -> Result<()>
 
 fn svg_title(title: &str) -> String {
     format!(
-        r#"<text x="{:.1}" y="26" font-size="22" font-weight="bold">{}</text>"#,
+        r#"<text x="{:.1}" y="24" font-size="22" font-weight="bold">{}</text>"#,
         LEFT_MARGIN,
         xml_escape(title)
     )
@@ -1423,8 +1498,8 @@ fn reference_star(cx: f64, cy: f64, radius: f64) -> String {
 }
 
 fn plot_legend() -> String {
-    let legend_x = SVG_WIDTH as f64 - RIGHT_MARGIN - 250.0;
-    let legend_y = 18.0;
+    let legend_x = LEFT_MARGIN;
+    let legend_y = 62.0;
     let diamond_x = legend_x + 90.0;
     let diamond_y = legend_y + 7.0;
     let mut out = String::new();

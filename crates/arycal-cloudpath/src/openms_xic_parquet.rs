@@ -1,5 +1,5 @@
 use duckdb::{Connection, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::osw::PrecursorIdData;
 use crate::sqmass::{decompress_data, TransitionGroup};
@@ -163,13 +163,19 @@ impl ChromatogramReader for OpenMSXicParquetChromatogramReader {
         include_precursor: bool,
         num_isotopes: usize,
     ) -> anyhow::Result<HashMap<i32, TransitionGroup>> {
-        // Build map of precursor_id -> list of transition ids we care about.
-        let precursor_to_transitions: HashMap<i64, Vec<i64>> = precursors
+        let _ = (include_precursor, num_isotopes);
+
+        // Respect the detecting transition IDs carried on each precursor.
+        let precursor_to_transitions: HashMap<i64, HashSet<i64>> = precursors
             .iter()
-            .map(|p| (p.precursor_id as i64, Vec::new()))
+            .map(|p| {
+                (
+                    p.precursor_id as i64,
+                    p.transition_ids.iter().map(|&id| id as i64).collect(),
+                )
+            })
             .collect();
 
-        // For now, request all rows and filter by PRECURSOR_ID that match our precursors.
         let precursor_ids = precursors
             .iter()
             .map(|p| p.precursor_id.to_string())
@@ -203,6 +209,13 @@ impl ChromatogramReader for OpenMSXicParquetChromatogramReader {
         for r in rows {
             let (precursor_id_opt, transition_id_opt, rt_data, intensity_data, rt_comp, int_comp) = r?;
             if let (Some(precursor_id), Some(transition_id)) = (precursor_id_opt, transition_id_opt) {
+                let Some(allowed_transition_ids) = precursor_to_transitions.get(&precursor_id) else {
+                    continue;
+                };
+                if !allowed_transition_ids.contains(&transition_id) {
+                    continue;
+                }
+
                 let pid = precursor_id as i32;
 
                 let retention_times = decompress_data(&rt_data, rt_comp)
