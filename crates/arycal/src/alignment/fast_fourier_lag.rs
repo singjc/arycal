@@ -1,33 +1,33 @@
 use anyhow::Error as AnyHowError;
 use arycal_common::chromatogram::AlignedRTPointPair;
 use rand::prelude::IndexedRandom;
-use rustfft::{num_complex::Complex, FftPlanner};
-use std::f64;
-use std::collections::HashSet;
 use rayon::prelude::*;
+use rustfft::{num_complex::Complex, FftPlanner};
+use std::collections::HashSet;
+use std::f64;
 
 use super::alignment::calculate_distance;
 use super::alignment::construct_mst;
-use arycal_common::chromatogram::{Chromatogram, AlignedChromatogram};
 use arycal_cloudpath::sqmass::TransitionGroup;
-use arycal_common::config::AlignmentConfig;
 use arycal_cloudpath::util::extract_basename;
+use arycal_common::chromatogram::{AlignedChromatogram, Chromatogram};
+use arycal_common::config::AlignmentConfig;
 
 /// Finds the lag with the maximum correlation in a cross-correlation vector.
 ///
 /// # Parameters
 /// - `cross_corr`: A vector of cross-correlation values
+/// - `query_len`: Length of the query signal used to compute the full correlation
 ///
 /// # Returns
 /// - The lag with the maximum correlation
-pub fn find_lag_with_max_correlation(cross_corr: &[f64]) -> isize {
+pub fn find_lag_with_max_correlation(cross_corr: &[f64], query_len: usize) -> isize {
     let (max_idx, _) = cross_corr
         .iter()
         .enumerate()
         .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
         .unwrap();
-    let center = cross_corr.len() / 2;
-    max_idx as isize - center as isize
+    max_idx as isize - (query_len as isize - 1)
 }
 
 /// Computes a full real-valued cross-correlation using FFT.
@@ -102,13 +102,14 @@ pub(crate) fn fft_cross_correlate_full(reference: &[f64], query: &[f64]) -> Vec<
 /// - A new chromatogram with shifted retention times
 pub fn shift_chromatogram(chrom: &Chromatogram, lag: isize) -> Chromatogram {
     Chromatogram {
-        retention_times: chrom.retention_times.iter()
+        retention_times: chrom
+            .retention_times
+            .iter()
             .map(|&rt| rt + lag as f64)
             .collect(),
         ..chrom.clone()
     }
 }
-
 
 // /// Creates a mapping between the original retention times (RT) of two chromatograms based on the lag.
 // ///
@@ -159,15 +160,19 @@ pub fn create_fft_rt_mapping(
     // Pre-allocate with known capacity for efficiency
     let capacity = std::cmp::min(chrom1.retention_times.len(), chrom2.retention_times.len());
     let mut mapping = Vec::with_capacity(capacity);
-    
+
     // Create pairs by zipping retention time vectors
-    for (&rt1, &rt2) in chrom1.retention_times.iter().zip(chrom2.retention_times.iter()) {
+    for (&rt1, &rt2) in chrom1
+        .retention_times
+        .iter()
+        .zip(chrom2.retention_times.iter())
+    {
         mapping.push(AlignedRTPointPair {
             rt1: rt1 as f32,
             rt2: rt2 as f32,
         });
     }
-    
+
     mapping
 }
 
@@ -186,19 +191,21 @@ pub fn star_align_tics_fft(
 ) -> Result<Vec<AlignedChromatogram>, AnyHowError> {
     if smoothed_tics.len() < 2 {
         // return Err(AnyHowError::msg("At least two chromatograms are required for alignment"));
-        log::warn!("At least two chromatograms are required for alignment - returning empty result");
+        log::warn!(
+            "At least two chromatograms are required for alignment - returning empty result"
+        );
         return Ok(Vec::new());
     }
 
     // Random reference selection (keeping original method)
-     let reference_chrom = if let Some(ref_chrom) = &params.reference_run {
-        match smoothed_tics.iter()
-            .find(|x| x.metadata.get("basename").unwrap_or(&x.native_id) == &extract_basename(ref_chrom)) 
-        {
+    let reference_chrom = if let Some(ref_chrom) = &params.reference_run {
+        match smoothed_tics.iter().find(|x| {
+            x.metadata.get("basename").unwrap_or(&x.native_id) == &extract_basename(ref_chrom)
+        }) {
             Some(chrom) => chrom,
             None => {
                 log::warn!("Specified reference chromatogram not found - returning empty result");
-                return Ok(Vec::new());  // Return empty vector immediately
+                return Ok(Vec::new()); // Return empty vector immediately
             }
         }
     } else {
@@ -209,10 +216,14 @@ pub fn star_align_tics_fft(
     };
 
     let ref_intensities = &reference_chrom.intensities;
-    let ref_name = reference_chrom.metadata.get("basename").unwrap_or(&reference_chrom.native_id);
+    let ref_name = reference_chrom
+        .metadata
+        .get("basename")
+        .unwrap_or(&reference_chrom.native_id);
 
     // Process chromatograms in parallel
-    let aligned_chromatograms = smoothed_tics.par_iter()
+    let aligned_chromatograms = smoothed_tics
+        .par_iter()
         // .filter(|chrom| {
         //     let chrom_name = chrom.metadata.get("basename").unwrap_or(&chrom.native_id);
         //     chrom_name != ref_name
@@ -220,13 +231,24 @@ pub fn star_align_tics_fft(
         .map(|chrom| {
             // FFT cross-correlation
             let cross_corr = fft_cross_correlate_full(ref_intensities, &chrom.intensities);
+            if cross_corr.is_empty() {
+                return AlignedChromatogram {
+                    chromatogram: chrom.clone(),
+                    alignment_path: Vec::new(),
+                    lag: None,
+                    rt_mapping: Vec::new(),
+                    reference_basename: ref_name.clone(),
+                };
+            }
 
             // Find optimal lag
-            let lag = find_lag_with_max_correlation(&cross_corr);
+            let lag = find_lag_with_max_correlation(&cross_corr, chrom.intensities.len());
 
             // Create aligned chromatogram
             let aligned_chrom = Chromatogram {
-                retention_times: chrom.retention_times.iter()
+                retention_times: chrom
+                    .retention_times
+                    .iter()
                     .map(|&rt| rt + lag as f64)
                     .collect(),
                 ..chrom.clone()
@@ -281,10 +303,25 @@ pub fn progressive_align_tics_fft(
         // );
 
         // Step 1: Perform FFT-based cross-correlation
-        let cross_corr = fft_cross_correlate_full(&aligned_sum.intensities, &current_tic.intensities);
+        let cross_corr =
+            fft_cross_correlate_full(&aligned_sum.intensities, &current_tic.intensities);
+        if cross_corr.is_empty() {
+            aligned_chromatograms.push(AlignedChromatogram {
+                chromatogram: current_tic.clone(),
+                alignment_path: vec![],
+                lag: None,
+                rt_mapping: Vec::new(),
+                reference_basename: aligned_sum
+                    .metadata
+                    .get("basename")
+                    .unwrap_or(&aligned_sum.native_id)
+                    .clone(),
+            });
+            continue;
+        }
 
         // Step 2: Find the lag with the maximum correlation
-        let lag = find_lag_with_max_correlation(&cross_corr);
+        let lag = find_lag_with_max_correlation(&cross_corr, current_tic.intensities.len());
 
         // Step 3: Shift chromatogram retention times by the computed lag
         let aligned_chrom = shift_chromatogram(current_tic, lag);
@@ -301,7 +338,7 @@ pub fn progressive_align_tics_fft(
             chromatogram: aligned_chrom.clone(),
             alignment_path: vec![], // No path for FFT-based alignment
             lag: Some(lag),
-            rt_mapping: rt_mapping, 
+            rt_mapping: rt_mapping,
             reference_basename: aligned_sum
                 .metadata
                 .get("basename")
@@ -362,8 +399,38 @@ pub fn mst_align_tics_fft(
 
         // Step 1: Perform FFT-based cross-correlation
         let cross_corr = fft_cross_correlate_full(&chrom1.intensities, &chrom2.intensities);
+        if cross_corr.is_empty() {
+            if !aligned_chromatogram_indices.contains(&chrom1_idx) {
+                aligned_chromatograms.push(AlignedChromatogram {
+                    chromatogram: chrom1.clone(),
+                    alignment_path: vec![],
+                    lag: None,
+                    rt_mapping: Vec::new(),
+                    reference_basename: chrom1
+                        .metadata
+                        .get("basename")
+                        .unwrap_or(&chrom1.native_id)
+                        .clone(),
+                });
+                aligned_chromatogram_indices.insert(chrom1_idx);
+            }
 
-        let lag = find_lag_with_max_correlation(&cross_corr);
+            aligned_chromatograms.push(AlignedChromatogram {
+                chromatogram: chrom2.clone(),
+                alignment_path: vec![],
+                lag: None,
+                rt_mapping: Vec::new(),
+                reference_basename: chrom1
+                    .metadata
+                    .get("basename")
+                    .unwrap_or(&chrom1.native_id)
+                    .clone(),
+            });
+            aligned_chromatogram_indices.insert(chrom2_idx);
+            continue;
+        }
+
+        let lag = find_lag_with_max_correlation(&cross_corr, chrom2.intensities.len());
 
         // Step 2: Shift chromatogram retention times by the computed lag
         let aligned_chrom2 = shift_chromatogram(chrom2, lag);
@@ -376,7 +443,11 @@ pub fn mst_align_tics_fft(
                 alignment_path: vec![],
                 lag: Some(lag),
                 rt_mapping: rt_mapping.clone(),
-                reference_basename: chrom1.metadata.get("basename").unwrap_or(&chrom1.native_id).clone(),
+                reference_basename: chrom1
+                    .metadata
+                    .get("basename")
+                    .unwrap_or(&chrom1.native_id)
+                    .clone(),
             });
             aligned_chromatogram_indices.insert(chrom1_idx);
         }
@@ -387,7 +458,11 @@ pub fn mst_align_tics_fft(
             alignment_path: vec![],
             lag: Some(lag),
             rt_mapping,
-            reference_basename: chrom1.metadata.get("basename").unwrap_or(&chrom1.native_id).clone(),
+            reference_basename: chrom1
+                .metadata
+                .get("basename")
+                .unwrap_or(&chrom1.native_id)
+                .clone(),
         });
         aligned_chromatogram_indices.insert(chrom2_idx);
 
@@ -414,7 +489,7 @@ mod tests {
         let query = vec![0.0, 1.0, 0.0, 0.0, 0.0];
 
         let cross_corr = fft_cross_correlate_full(&reference, &query);
-        let lag = find_lag_with_max_correlation(&cross_corr);
+        let lag = find_lag_with_max_correlation(&cross_corr, query.len());
 
         assert_eq!(lag, 1);
     }
@@ -425,8 +500,19 @@ mod tests {
         let query = vec![0.0, 0.0, 1.0, 0.0, 0.0];
 
         let cross_corr = fft_cross_correlate_full(&reference, &query);
-        let lag = find_lag_with_max_correlation(&cross_corr);
+        let lag = find_lag_with_max_correlation(&cross_corr, query.len());
 
         assert_eq!(lag, -1);
+    }
+
+    #[test]
+    fn fft_cross_correlation_handles_unequal_lengths() {
+        let reference = vec![0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+        let query = vec![0.0, 1.0, 0.0];
+
+        let cross_corr = fft_cross_correlate_full(&reference, &query);
+        let lag = find_lag_with_max_correlation(&cross_corr, query.len());
+
+        assert_eq!(lag, 1);
     }
 }

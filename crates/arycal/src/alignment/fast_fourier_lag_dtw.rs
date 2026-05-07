@@ -1,14 +1,14 @@
 use anyhow::Error as AnyHowError;
+use dtw_rs::{Algorithm, DynamicTimeWarping};
 use rand::prelude::IndexedRandom;
 use rayon::prelude::*;
-use dtw_rs::{Algorithm, DynamicTimeWarping};
 
 use crate::alignment::fast_fourier_lag::{
     fft_cross_correlate_full, find_lag_with_max_correlation, shift_chromatogram,
 };
+use arycal_cloudpath::util::extract_basename;
 use arycal_common::chromatogram::{AlignedChromatogram, AlignedRTPointPair, Chromatogram};
 use arycal_common::config::AlignmentConfig;
-use arycal_cloudpath::util::extract_basename;
 
 // /// Creates a mapping between the original retention times (RT) of two chromatograms based on the lag and DTW alignment.
 // ///
@@ -64,10 +64,9 @@ pub fn create_fft_dtw_rt_mapping(
 ) -> Vec<AlignedRTPointPair> {
     optimal_path
         .iter()
-        .filter(|&&(i, j)| i > 0 && j > 0)
         .map(|&(i, j)| AlignedRTPointPair {
-            rt1: chrom1.retention_times[i - 1] as f32,
-            rt2: chrom2.retention_times[j - 1] as f32,
+            rt1: chrom1.retention_times[i] as f32,
+            rt2: chrom2.retention_times[j] as f32,
         })
         .collect()
 }
@@ -92,19 +91,21 @@ pub fn star_align_tics_fft_with_local_refinement(
 ) -> Result<Vec<AlignedChromatogram>, AnyHowError> {
     if smoothed_tics.len() < 2 {
         // return Err(AnyHowError::msg("At least two chromatograms are required for alignment"));
-        log::warn!("At least two chromatograms are required for alignment - returning empty result");
+        log::warn!(
+            "At least two chromatograms are required for alignment - returning empty result"
+        );
         return Ok(Vec::new());
     }
 
     // Random reference selection (keeping original method)
     let reference_chrom = if let Some(ref_chrom) = &params.reference_run {
-        match smoothed_tics.iter()
-            .find(|x| x.metadata.get("basename").unwrap_or(&x.native_id) == &extract_basename(ref_chrom)) 
-        {
+        match smoothed_tics.iter().find(|x| {
+            x.metadata.get("basename").unwrap_or(&x.native_id) == &extract_basename(ref_chrom)
+        }) {
             Some(chrom) => chrom,
             None => {
                 log::warn!("Specified reference chromatogram not found - returning empty result");
-                return Ok(Vec::new());  // Return empty vector immediately
+                return Ok(Vec::new()); // Return empty vector immediately
             }
         }
     } else {
@@ -115,10 +116,14 @@ pub fn star_align_tics_fft_with_local_refinement(
     };
 
     let ref_intensities = reference_chrom.intensities.as_slice();
-    let ref_name = reference_chrom.metadata.get("basename").unwrap_or(&reference_chrom.native_id);
+    let ref_name = reference_chrom
+        .metadata
+        .get("basename")
+        .unwrap_or(&reference_chrom.native_id);
 
     // Process chromatograms in parallel
-    let aligned_chromatograms = smoothed_tics.par_iter()
+    let aligned_chromatograms = smoothed_tics
+        .par_iter()
         // .filter(|chrom| {
         //     let chrom_name = chrom.metadata.get("basename").unwrap_or(&chrom.native_id);
         //     chrom_name != ref_name
@@ -126,9 +131,18 @@ pub fn star_align_tics_fft_with_local_refinement(
         .map(|chrom| {
             // Step 1: FFT cross-correlation
             let cross_corr = fft_cross_correlate_full(ref_intensities, &chrom.intensities);
+            if cross_corr.is_empty() {
+                return AlignedChromatogram {
+                    chromatogram: chrom.clone(),
+                    alignment_path: Vec::new(),
+                    lag: None,
+                    rt_mapping: Vec::new(),
+                    reference_basename: ref_name.to_string(),
+                };
+            }
 
             // Step 2: Find optimal lag
-            let lag = find_lag_with_max_correlation(&cross_corr);
+            let lag = find_lag_with_max_correlation(&cross_corr, chrom.intensities.len());
 
             // Step 3: Shift chromatogram
             let mut aligned_chrom = shift_chromatogram(chrom, lag);
@@ -137,13 +151,19 @@ pub fn star_align_tics_fft_with_local_refinement(
             let query_intensities_slice = aligned_chrom.intensities.as_slice();
             let dtw = DynamicTimeWarping::between(
                 ref_intensities,
-                query_intensities_slice      // Use slice directly
+                query_intensities_slice, // Use slice directly
             );
             let path = dtw.path();
 
             // Apply DTW alignment
-            let (refined_rt, refined_intensities): (Vec<_>, Vec<_>) = path.iter()
-                .map(|&(_, j)| (aligned_chrom.retention_times[j], aligned_chrom.intensities[j]))
+            let (refined_rt, refined_intensities): (Vec<_>, Vec<_>) = path
+                .iter()
+                .map(|&(_, j)| {
+                    (
+                        aligned_chrom.retention_times[j],
+                        aligned_chrom.intensities[j],
+                    )
+                })
                 .unzip();
 
             // Check if we want to retain the alignment path
@@ -171,4 +191,36 @@ pub fn star_align_tics_fft_with_local_refinement(
         .collect();
 
     Ok(aligned_chromatograms)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::create_fft_dtw_rt_mapping;
+    use arycal_common::chromatogram::Chromatogram;
+
+    #[test]
+    fn fft_dtw_rt_mapping_uses_zero_based_path_indices() {
+        let reference = Chromatogram {
+            id: 1,
+            native_id: "reference".to_string(),
+            retention_times: vec![10.0, 20.0, 30.0],
+            intensities: vec![1.0, 2.0, 3.0],
+            metadata: Default::default(),
+        };
+        let query = Chromatogram {
+            id: 2,
+            native_id: "query".to_string(),
+            retention_times: vec![11.0, 21.0, 31.0],
+            intensities: vec![1.5, 2.5, 3.5],
+            metadata: Default::default(),
+        };
+
+        let mapping = create_fft_dtw_rt_mapping(&[(0, 0), (1, 1), (2, 2)], &reference, &query);
+
+        assert_eq!(mapping.len(), 3);
+        assert_eq!(mapping[0].rt1, 10.0_f32);
+        assert_eq!(mapping[0].rt2, 11.0_f32);
+        assert_eq!(mapping[2].rt1, 30.0_f32);
+        assert_eq!(mapping[2].rt2, 31.0_f32);
+    }
 }

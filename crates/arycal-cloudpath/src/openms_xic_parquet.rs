@@ -150,7 +150,9 @@ impl ChromatogramReader for OpenMSXicParquetChromatogramReader {
             chromatogram.intensities = intensities;
 
             if let Some(pid) = precursor_id_opt {
-                chromatogram.metadata.insert("precursor_id".to_string(), pid.to_string());
+                chromatogram
+                    .metadata
+                    .insert("precursor_id".to_string(), pid.to_string());
             }
         }
 
@@ -166,15 +168,13 @@ impl ChromatogramReader for OpenMSXicParquetChromatogramReader {
         let _ = (include_precursor, num_isotopes);
 
         // Respect the detecting transition IDs carried on each precursor.
-        let precursor_to_transitions: HashMap<i64, HashSet<i64>> = precursors
-            .iter()
-            .map(|p| {
-                (
-                    p.precursor_id as i64,
-                    p.transition_ids.iter().map(|&id| id as i64).collect(),
-                )
-            })
-            .collect();
+        let mut precursor_to_transitions: HashMap<i64, HashSet<i64>> = HashMap::new();
+        for p in precursors {
+            precursor_to_transitions
+                .entry(p.precursor_id as i64)
+                .or_default()
+                .extend(p.transition_ids.iter().map(|&id| id as i64));
+        }
 
         let precursor_ids = precursors
             .iter()
@@ -207,9 +207,12 @@ impl ChromatogramReader for OpenMSXicParquetChromatogramReader {
         let mut groups: HashMap<i32, TransitionGroup> = HashMap::new();
 
         for r in rows {
-            let (precursor_id_opt, transition_id_opt, rt_data, intensity_data, rt_comp, int_comp) = r?;
-            if let (Some(precursor_id), Some(transition_id)) = (precursor_id_opt, transition_id_opt) {
-                let Some(allowed_transition_ids) = precursor_to_transitions.get(&precursor_id) else {
+            let (precursor_id_opt, transition_id_opt, rt_data, intensity_data, rt_comp, int_comp) =
+                r?;
+            if let (Some(precursor_id), Some(transition_id)) = (precursor_id_opt, transition_id_opt)
+            {
+                let Some(allowed_transition_ids) = precursor_to_transitions.get(&precursor_id)
+                else {
                     continue;
                 };
                 if !allowed_transition_ids.contains(&transition_id) {
@@ -225,15 +228,20 @@ impl ChromatogramReader for OpenMSXicParquetChromatogramReader {
 
                 let native_id = format!("transition:{}", transition_id);
 
-                let group = groups.entry(pid).or_insert_with(|| TransitionGroup::new(format!("precursor_{}", pid)));
+                let group = groups
+                    .entry(pid)
+                    .or_insert_with(|| TransitionGroup::new(format!("precursor_{}", pid)));
 
-                let chrom = group.chromatograms.entry(native_id.clone()).or_insert(Chromatogram {
-                    id: transition_id as i32,
-                    native_id: native_id.clone(),
-                    retention_times: Vec::new(),
-                    intensities: Vec::new(),
-                    metadata: HashMap::new(),
-                });
+                let chrom = group
+                    .chromatograms
+                    .entry(native_id.clone())
+                    .or_insert(Chromatogram {
+                        id: transition_id as i32,
+                        native_id: native_id.clone(),
+                        retention_times: Vec::new(),
+                        intensities: Vec::new(),
+                        metadata: HashMap::new(),
+                    });
 
                 chrom.retention_times = retention_times;
                 chrom.intensities = intensities;
@@ -241,15 +249,24 @@ impl ChromatogramReader for OpenMSXicParquetChromatogramReader {
         }
 
         // Debug: report how many groups/chromatograms were loaded
-        log::trace!("OpenMS parquet: loaded {} chromatograms across {} precursor groups from {}",
-            groups.values().map(|g| g.chromatograms.len()).sum::<usize>(), groups.len(), self.file);
+        log::trace!(
+            "OpenMS parquet: loaded {} chromatograms across {} precursor groups from {}",
+            groups
+                .values()
+                .map(|g| g.chromatograms.len())
+                .sum::<usize>(),
+            groups.len(),
+            self.file
+        );
 
         // Add metadata file & basename
         let basename = extract_basename(&self.file);
         let file_str = self.file.to_string();
         for group in groups.values_mut() {
             group.metadata.insert("file".to_string(), file_str.clone());
-            group.metadata.insert("basename".to_string(), basename.clone());
+            group
+                .metadata
+                .insert("basename".to_string(), basename.clone());
         }
 
         Ok(groups)

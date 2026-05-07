@@ -6,8 +6,8 @@ use anyhow::{Context, Result};
 use arycal_cli::{input::Input, Runner};
 use arycal_cloudpath::osw::{FeatureData, PrecursorIdData, ValueEntryType};
 use arycal_cloudpath::sqmass::TransitionGroup;
-use arycal_core::alignment::alignment::{inspect_peak_mapping_candidates, PeakMappingInspection};
 use arycal_common::{chromatogram::Chromatogram, AlignedTics, PeakMapping, PrecursorXics};
+use arycal_core::alignment::alignment::{inspect_peak_mapping_candidates, PeakMappingInspection};
 use clap::{Arg, ArgAction, Command, ValueHint};
 use serde::Serialize;
 
@@ -133,7 +133,11 @@ fn main() -> Result<()> {
         let precursor_out = output_dir.join(format!(
             "precursor_{}_{}",
             precursor.precursor_id,
-            sanitize_filename(&(precursor.modified_sequence.clone() + "_" + &precursor.precursor_charge.to_string()))
+            sanitize_filename(
+                &(precursor.modified_sequence.clone()
+                    + "_"
+                    + &precursor.precursor_charge.to_string())
+            )
         ));
         fs::create_dir_all(&precursor_out)?;
 
@@ -141,12 +145,17 @@ fn main() -> Result<()> {
             .get(&precursor.precursor_id)
             .cloned()
             .unwrap_or_default();
-        let xics = xics_batch
-            .get(&precursor.precursor_id)
-            .with_context(|| format!("Missing XIC batch for precursor {}", precursor.precursor_id))?;
+        let xics = xics_batch.get(&precursor.precursor_id).with_context(|| {
+            format!("Missing XIC batch for precursor {}", precursor.precursor_id)
+        })?;
         let aligned = aligned_batch
             .get(&precursor.precursor_id)
-            .with_context(|| format!("Missing aligned batch for precursor {}", precursor.precursor_id))?;
+            .with_context(|| {
+                format!(
+                    "Missing aligned batch for precursor {}",
+                    precursor.precursor_id
+                )
+            })?;
         let features = feature_data
             .get(&precursor.precursor_id)
             .cloned()
@@ -156,9 +165,13 @@ fn main() -> Result<()> {
             .cloned()
             .unwrap_or_default();
 
-        let peak_mapping_inspections =
-            build_peak_mapping_inspections(aligned, &features, &input);
-        write_raw_xics_svg(&precursor_out.join("raw_xics.svg"), precursor, &raw_groups, xics)?;
+        let peak_mapping_inspections = build_peak_mapping_inspections(aligned, &features, &input);
+        write_raw_xics_svg(
+            &precursor_out.join("raw_xics.svg"),
+            precursor,
+            &raw_groups,
+            xics,
+        )?;
         write_aligned_tics_svg(&precursor_out.join("aligned_tics.svg"), precursor, aligned)?;
         write_peak_mapping_svg(
             &precursor_out.join("peak_mappings.svg"),
@@ -222,7 +235,10 @@ fn build_summary(
     let raw_by_run: HashMap<String, &TransitionGroup> = raw_groups
         .iter()
         .filter_map(|group| {
-            group.metadata.get("basename").map(|basename| (basename.clone(), group))
+            group
+                .metadata
+                .get("basename")
+                .map(|basename| (basename.clone(), group))
         })
         .collect();
     let smoothed_by_run = smoothed_tic_map(xics);
@@ -230,10 +246,13 @@ fn build_summary(
         .aligned_chromatograms
         .iter()
         .map(|chrom| {
-            (
-                chrom.chromatogram.metadata.get("basename").unwrap().clone(),
-                chrom,
-            )
+            let run = chrom
+                .chromatogram
+                .metadata
+                .get("basename")
+                .cloned()
+                .unwrap_or_else(|| chrom.chromatogram.native_id.clone());
+            (run, chrom)
         })
         .collect();
 
@@ -574,7 +593,14 @@ fn write_aligned_tics_svg(
     aligned: &AlignedTics,
 ) -> Result<()> {
     let mut chromatograms = aligned.aligned_chromatograms.clone();
-    chromatograms.sort_by_key(|chrom| chrom.chromatogram.metadata.get("basename").cloned().unwrap_or_default());
+    chromatograms.sort_by_key(|chrom| {
+        chrom
+            .chromatogram
+            .metadata
+            .get("basename")
+            .cloned()
+            .unwrap_or_default()
+    });
 
     let mut x_min = f64::INFINITY;
     let mut x_max = f64::NEG_INFINITY;
@@ -598,7 +624,12 @@ fn write_aligned_tics_svg(
 
     for (idx, chrom) in chromatograms.iter().enumerate() {
         let lane = lane_metrics(idx);
-        let basename = chrom.chromatogram.metadata.get("basename").cloned().unwrap_or_default();
+        let basename = chrom
+            .chromatogram
+            .metadata
+            .get("basename")
+            .cloned()
+            .unwrap_or_default();
         body.push_str(&lane_background(&lane));
         body.push_str(&lane_label(
             &lane,
@@ -606,7 +637,10 @@ fn write_aligned_tics_svg(
                 "{} -> {}{}",
                 basename,
                 chrom.reference_basename,
-                chrom.lag.map(|lag| format!(" (lag={})", lag)).unwrap_or_default()
+                chrom
+                    .lag
+                    .map(|lag| format!(" (lag={})", lag))
+                    .unwrap_or_default()
             ),
         ));
         body.push_str(&series_polyline(
@@ -815,7 +849,8 @@ fn write_peak_mapping_links_svg(
     let group_by_run: HashMap<String, &TransitionGroup> = raw_groups
         .iter()
         .filter_map(|group| {
-            group.metadata
+            group
+                .metadata
                 .get("basename")
                 .map(|basename| (basename.clone(), group))
         })
@@ -885,8 +920,7 @@ fn write_peak_mapping_links_svg(
     let mut body = String::new();
     body.push_str(&svg_title(&format!(
         "Smoothed XICs with linked peak mappings for precursor {} ({})",
-        precursor.precursor_id,
-        aligned.group_id
+        precursor.precursor_id, aligned.group_id
     )));
     body.push_str(&plot_legend());
 
@@ -919,23 +953,10 @@ fn write_peak_mapping_links_svg(
             for (alignment_idx, peak) in reference_peaks.iter().enumerate() {
                 let color = color_for_index(alignment_idx);
                 body.push_str(&boundary_pair_lines(
-                    peak.left,
-                    peak.right,
-                    x_min,
-                    x_max,
-                    &lane,
-                    color,
-                    2.0,
-                    None,
+                    peak.left, peak.right, x_min, x_max, &lane, color, 2.0, None,
                 ));
                 body.push_str(&marker_circle(
-                    peak.rt,
-                    x_min,
-                    x_max,
-                    &lane,
-                    "#111827",
-                    3.0,
-                    0.55,
+                    peak.rt, x_min, x_max, &lane, "#111827", 3.0, 0.55,
                 ));
             }
             body.push_str(&lane_note(
@@ -943,7 +964,10 @@ fn write_peak_mapping_links_svg(
                 &format!("reference peaks: {}", reference_peaks.len()),
             ));
         } else {
-            let mapped_count = target_mappings_by_run.get(run).map(|rows| rows.len()).unwrap_or(0);
+            let mapped_count = target_mappings_by_run
+                .get(run)
+                .map(|rows| rows.len())
+                .unwrap_or(0);
             if let Some(run_mappings) = target_mappings_by_run.get(run) {
                 let mut alignment_ids: Vec<_> = run_mappings.keys().copied().collect();
                 alignment_ids.sort_unstable();
@@ -987,17 +1011,16 @@ fn write_peak_mapping_links_svg(
                 }
             }
 
-            body.push_str(&lane_note(&lane, &format!("mapped peaks: {}", mapped_count)));
+            body.push_str(&lane_note(
+                &lane,
+                &format!("mapped peaks: {}", mapped_count),
+            ));
         }
     }
 
     for (alignment_idx, peak) in reference_peaks.iter().enumerate() {
         let color = color_for_index(alignment_idx);
-        let mut previous_segment = Some((
-            0usize,
-            peak.left,
-            peak.right,
-        ));
+        let mut previous_segment = Some((0usize, peak.left, peak.right));
 
         for (run_idx, run) in ordered_runs.iter().enumerate().skip(1) {
             if let Some(mapping) = target_mappings_by_run
@@ -1026,7 +1049,11 @@ fn write_peak_mapping_links_svg(
                         color,
                     ));
                 }
-                previous_segment = Some((run_idx, mapping.aligned_left_width, mapping.aligned_right_width));
+                previous_segment = Some((
+                    run_idx,
+                    mapping.aligned_left_width,
+                    mapping.aligned_right_width,
+                ));
             } else {
                 previous_segment = None;
             }
@@ -1037,10 +1064,17 @@ fn write_peak_mapping_links_svg(
     write_svg(path, SVG_WIDTH, height, &body)
 }
 
-fn smoothed_tic_map(xics: &PrecursorXics) -> HashMap<String, arycal_common::chromatogram::Chromatogram> {
+fn smoothed_tic_map(
+    xics: &PrecursorXics,
+) -> HashMap<String, arycal_common::chromatogram::Chromatogram> {
     xics.smoothed_tics
         .iter()
-        .filter_map(|chrom| chrom.metadata.get("basename").map(|basename| (basename.clone(), chrom.clone())))
+        .filter_map(|chrom| {
+            chrom
+                .metadata
+                .get("basename")
+                .map(|basename| (basename.clone(), chrom.clone()))
+        })
         .collect()
 }
 
@@ -1090,10 +1124,13 @@ fn select_link_plot_native_ids(
         .cloned()
         .collect();
 
-    let Some(reference_group) = raw_groups
-        .iter()
-        .find(|group| group.metadata.get("basename").map(|run| run == reference_run).unwrap_or(false))
-    else {
+    let Some(reference_group) = raw_groups.iter().find(|group| {
+        group
+            .metadata
+            .get("basename")
+            .map(|run| run == reference_run)
+            .unwrap_or(false)
+    }) else {
         return raw_fragment_ids
             .into_iter()
             .take(MAX_LINK_PLOT_TRANSITIONS)
@@ -1136,7 +1173,10 @@ fn select_link_plot_native_ids(
             .then(a.0.cmp(&b.0))
     });
     ranked_ids.truncate(MAX_LINK_PLOT_TRANSITIONS);
-    ranked_ids.into_iter().map(|(native_id, _)| native_id).collect()
+    ranked_ids
+        .into_iter()
+        .map(|(native_id, _)| native_id)
+        .collect()
 }
 
 fn extract_feature_boundaries(features: &[FeatureData], basename: &str) -> Vec<FeatureBoundary> {
@@ -1407,13 +1447,7 @@ fn vertical_marker(
         .unwrap_or_default();
     format!(
         r#"<line x1="{:.1}" y1="{:.1}" x2="{:.1}" y2="{:.1}" stroke="{}" stroke-width="{:.2}" stroke-opacity="0.95"{} />"#,
-        x,
-        y1,
-        x,
-        y2,
-        color,
-        stroke_width,
-        dash_attr
+        x, y1, x, y2, color, stroke_width, dash_attr
     )
 }
 
@@ -1596,10 +1630,7 @@ fn min_max_normalize_values(values: &[f64]) -> Vec<f64> {
     }
 
     let min_value = values.iter().copied().fold(f64::INFINITY, f64::min);
-    let max_value = values
-        .iter()
-        .copied()
-        .fold(f64::NEG_INFINITY, f64::max);
+    let max_value = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
 
     if (max_value - min_value).abs() < f64::EPSILON {
         return vec![0.0; values.len()];
@@ -1631,9 +1662,7 @@ fn range_from_slice(values: &[f64]) -> Option<(f64, f64)> {
 }
 
 fn format_optional_f64(value: Option<f64>) -> String {
-    value
-        .map(|value| format!("{value:.6}"))
-        .unwrap_or_default()
+    value.map(|value| format!("{value:.6}")).unwrap_or_default()
 }
 
 fn format_optional_i64(value: Option<i64>) -> String {
@@ -1650,8 +1679,8 @@ fn format_optional_isize(value: Option<isize>) -> String {
 
 fn color_for_index(idx: usize) -> &'static str {
     const COLORS: [&str; 10] = [
-        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
-        "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
+        "#bcbd22", "#17becf",
     ];
     COLORS[idx % COLORS.len()]
 }
