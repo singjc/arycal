@@ -244,6 +244,86 @@ impl Runner {
         })
     }
 
+    pub fn get_precursors_by_ids(
+        &self,
+        precursor_ids: &[i32],
+    ) -> anyhow::Result<Vec<PrecursorIdData>> {
+        let precursor_lookup: HashMap<i32, PrecursorIdData> = self
+            .precursor_map
+            .iter()
+            .cloned()
+            .map(|p| (p.precursor_id, p))
+            .collect();
+
+        let mut selected = Vec::with_capacity(precursor_ids.len());
+        let mut missing = Vec::new();
+
+        for precursor_id in precursor_ids {
+            match precursor_lookup.get(precursor_id) {
+                Some(precursor) => selected.push(precursor.clone()),
+                None => missing.push(*precursor_id),
+            }
+        }
+
+        if !missing.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Could not find precursor IDs in the loaded feature file: {:?}",
+                missing
+            ));
+        }
+
+        Ok(selected)
+    }
+
+    pub fn read_transition_groups_batch(
+        &self,
+        precursors: &[PrecursorIdData],
+    ) -> anyhow::Result<HashMap<i32, Vec<TransitionGroup>>> {
+        let all_precursor_groups: Vec<HashMap<i32, TransitionGroup>> = self
+            .xic_access
+            .par_iter()
+            .map(|access| {
+                access.read_chromatograms_for_precursors(
+                    precursors,
+                    self.parameters.xic.include_precursor,
+                    self.parameters.xic.num_isotopes,
+                )
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        let grouped = precursors
+            .iter()
+            .map(|precursor| {
+                let groups = all_precursor_groups
+                    .iter()
+                    .filter_map(|groups| groups.get(&precursor.precursor_id).cloned())
+                    .collect::<Vec<_>>();
+                (precursor.precursor_id, groups)
+            })
+            .collect();
+
+        Ok(grouped)
+    }
+
+    pub fn fetch_feature_data_for_aligned_batch(
+        &self,
+        aligned_batch: &HashMap<i32, AlignedTics>,
+    ) -> anyhow::Result<HashMap<i32, Vec<FeatureData>>> {
+        let precursor_run_sets: Vec<(i32, Vec<String>)> = aligned_batch
+            .iter()
+            .map(|(precursor_id, aligned)| {
+                let runs = aligned
+                    .aligned_chromatograms
+                    .iter()
+                    .map(|chrom| chrom.chromatogram.metadata.get("basename").unwrap().to_string())
+                    .collect();
+                (*precursor_id, runs)
+            })
+            .collect();
+
+        self.feature_access[0].fetch_feature_data_for_precursor_batch(&precursor_run_sets)
+    }
+
     #[cfg(not(feature = "mpi"))]
     pub fn run(&mut self) -> anyhow::Result<()> {
         let mut system = sysinfo::System::new_all();
@@ -808,19 +888,8 @@ impl Runner {
     ) -> anyhow::Result<HashMap<i32, PrecursorXics>> {
         // First read all chromatograms for all precursors across all files
         let start_time = Instant::now();
-        
-        // Process each SQLite file in parallel
-        let all_precursor_groups: Vec<HashMap<i32, TransitionGroup>> = self.xic_access
-            .par_iter()
-            .map(|access| {
-                access.read_chromatograms_for_precursors(
-                    precursors,
-                    self.parameters.xic.include_precursor,
-                    self.parameters.xic.num_isotopes,
-                )
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        
+        let raw_transition_groups = self.read_transition_groups_batch(precursors)?;
+
         log::trace!("XIC extraction from all files took: {:?}", start_time.elapsed());
     
         // Then process each precursor's chromatograms
@@ -828,14 +897,11 @@ impl Runner {
         let xic_batch: Result<HashMap<_, _>, _> = precursors
             .par_iter()
             .filter_map(|precursor| {
-                // Collect chromatograms for this precursor from all files
-                let mut chromatograms = Vec::new();
-                for precursor_groups in &all_precursor_groups {
-                    if let Some(group) = precursor_groups.get(&precursor.precursor_id) {
-                        chromatograms.push(group.clone());
-                    }
-                }
-    
+                let chromatograms = raw_transition_groups
+                    .get(&precursor.precursor_id)
+                    .cloned()
+                    .unwrap_or_default();
+
                 if chromatograms.is_empty() {
                     log::trace!("No chromatograms found for precursor {}", precursor.precursor_id);
                     return None;
@@ -972,21 +1038,30 @@ impl Runner {
         aligned_batch: HashMap<i32, AlignedTics>,
         precursors: &[PrecursorIdData],
     ) -> anyhow::Result<HashMap<i32, PrecursorAlignmentResult>> {
-        // Get all precursor IDs and their run sets
-        let precursor_run_sets: Vec<(i32, Vec<String>)> = aligned_batch.iter()
+        let start_time = Instant::now();
+        let all_feature_data = self.fetch_feature_data_for_aligned_batch(&aligned_batch)?;
+        let precursor_run_sets: Vec<(i32, Vec<String>)> = aligned_batch
+            .iter()
             .map(|(precursor_id, aligned)| {
-                let runs = aligned.aligned_chromatograms.iter()
+                let runs = aligned
+                    .aligned_chromatograms
+                    .iter()
                     .map(|chrom| chrom.chromatogram.metadata.get("basename").unwrap().to_string())
                     .collect();
                 (*precursor_id, runs)
             })
             .collect();
-
-        // Fetch all feature data in one batch
-        let start_time = Instant::now();
-        let all_feature_data = self.feature_access[0]
-            .fetch_feature_data_for_precursor_batch(&precursor_run_sets)?;
         log::debug!("Fetching feature data for {:?} precursors for {:?} runs took: {:?} ({:?} MiB)", precursor_run_sets.len(), precursor_run_sets.iter().map(|(_, runs)| runs.len()).sum::<usize>(), start_time.elapsed(), all_feature_data.deep_size_of() / 1024 / 1024);
+
+        self.process_peak_mappings_batch_with_feature_data(aligned_batch, precursors, &all_feature_data)
+    }
+
+    pub fn process_peak_mappings_batch_with_feature_data(
+        &self,
+        aligned_batch: HashMap<i32, AlignedTics>,
+        precursors: &[PrecursorIdData],
+        all_feature_data: &HashMap<i32, Vec<FeatureData>>,
+    ) -> anyhow::Result<HashMap<i32, PrecursorAlignmentResult>> {
     
         // Create a lookup map from precursor_id to PrecursorIdData
         let precursor_map: HashMap<i32, &PrecursorIdData> = precursors
