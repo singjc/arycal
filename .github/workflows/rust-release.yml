@@ -36,8 +36,9 @@ jobs:
             bin: arycal
             os: ubuntu-latest
             build: |
-              cargo build --release
+              cargo build --release --bin arycal --bin arycal-debug-alignment
               cp target/release/arycal artifacts/arycal
+              cp target/release/arycal-debug-alignment artifacts/arycal-debug-alignment
 
           # CLI: fully static musl via cross (with Rust 1.85.0 in container)
           - name: x86_64-linux-musl
@@ -46,8 +47,9 @@ jobs:
             os: ubuntu-latest
             build: |
               cargo install cross --version 0.2.5 --locked
-              CROSS_CONTAINER_ENGINE=docker cross build --release --target=x86_64-unknown-linux-musl
+              CROSS_CONTAINER_ENGINE=docker cross build --release --target=x86_64-unknown-linux-musl --bin arycal --bin arycal-debug-alignment
               cp target/x86_64-unknown-linux-musl/release/arycal artifacts/arycal
+              cp target/x86_64-unknown-linux-musl/release/arycal-debug-alignment artifacts/arycal-debug-alignment
 
           # CLI: glibc + MPI
           - name: x86_64-linux-gnu-mpi
@@ -56,8 +58,9 @@ jobs:
             os: ubuntu-latest
             build: |
               sudo apt-get update && sudo apt-get install -y libopenmpi-dev openmpi-bin
-              cargo build --release --target=x86_64-unknown-linux-gnu --features mpi
+              cargo build --release --target=x86_64-unknown-linux-gnu --features mpi --bin arycal --bin arycal-debug-alignment
               cp target/x86_64-unknown-linux-gnu/release/arycal artifacts/arycal
+              cp target/x86_64-unknown-linux-gnu/release/arycal-debug-alignment artifacts/arycal-debug-alignment
 
           # macOS + Windows
           - name: x86_64-darwin
@@ -66,8 +69,9 @@ jobs:
             os: macos-latest
             build: |
               rustup target add x86_64-apple-darwin
-              cargo build --release --target=x86_64-apple-darwin
+              cargo build --release --target=x86_64-apple-darwin --bin arycal --bin arycal-debug-alignment
               cp target/x86_64-apple-darwin/release/arycal artifacts/arycal
+              cp target/x86_64-apple-darwin/release/arycal-debug-alignment artifacts/arycal-debug-alignment
 
           - name: x86_64-windows
             bin: arycal
@@ -75,8 +79,9 @@ jobs:
             os: windows-latest
             build: |
               rustup target add x86_64-pc-windows-msvc
-              cargo build --release --target=x86_64-pc-windows-msvc
+              cargo build --release --target=x86_64-pc-windows-msvc --bin arycal --bin arycal-debug-alignment
               cp target/x86_64-pc-windows-msvc/release/arycal.exe artifacts/arycal.exe
+              cp target/x86_64-pc-windows-msvc/release/arycal-debug-alignment.exe artifacts/arycal-debug-alignment.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -112,12 +117,24 @@ jobs:
       - name: Build
         run: bash -lc "${{ matrix.build }}"
 
-      - name: Upload Binaries to Release
+      - name: Upload arycal to Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin:     ${{ matrix.bin }}
           archive: ${{ matrix.bin }}-${{ steps.version.outputs.version }}-${{ matrix.name }}
+          target:  ${{ matrix.target || '' }}
+          include: LICENSE,README.md
+          tar:     unix
+          zip:     windows
+          token:   ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload arycal-debug-alignment to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin:     arycal-debug-alignment
+          archive: arycal-debug-alignment-${{ steps.version.outputs.version }}-${{ matrix.name }}
           target:  ${{ matrix.target || '' }}
           include: LICENSE,README.md
           tar:     unix
@@ -130,4 +147,3 @@ jobs:
         with:
           name: arycal-${{ steps.version.outputs.version }}-${{ matrix.name }}
           path: artifacts/*
-
