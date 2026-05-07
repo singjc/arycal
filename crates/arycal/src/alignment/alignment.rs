@@ -5,7 +5,7 @@ use arycal_common::config::AlignmentConfig;
 use union_find::{QuickFindUf, UnionBySize, UnionFind};
 use rayon::prelude::*;
 
-use arycal_cloudpath::osw::FeatureData;
+use arycal_cloudpath::osw::{FeatureData, ValueEntryType};
 use arycal_cloudpath::sqmass::TransitionGroup;
 use arycal_common::{chromatogram::{Chromatogram, AlignedChromatogram, apply_common_rt_space_single}, PeakMapping};
 
@@ -201,6 +201,55 @@ pub fn validate_widths(left_width: f64, right_width: f64) -> (f64, f64) {
     } else {
         (left_width, right_width)
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct PeakMappingCandidateDebug {
+    pub candidate_rank: usize,
+    pub aligned_feature_id: i64,
+    pub aligned_rt: f64,
+    pub aligned_left_width: f64,
+    pub aligned_right_width: f64,
+    pub abs_rt_diff_to_target: f64,
+    pub abs_rt_diff_to_reference: f64,
+    pub within_tolerance: bool,
+    pub selected_by_current_logic: bool,
+    pub intensity: Option<f64>,
+    pub normalized_summed_intensity: Option<f64>,
+    pub peakgroup_rank: Option<i32>,
+    pub qvalue: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PeakMappingInspection {
+    pub alignment_id: i64,
+    pub reference_feature_id: i64,
+    pub reference_rt: f64,
+    pub reference_left_width: f64,
+    pub reference_right_width: f64,
+    pub mapped_target_rt: f64,
+    pub roundtrip_reference_rt: Option<f64>,
+    pub roundtrip_error: Option<f64>,
+    pub lag: Option<isize>,
+    pub candidate_total_count: usize,
+    pub candidate_within_tolerance_count: usize,
+    pub selected_feature_id: Option<i64>,
+    pub selected_feature_rt: Option<f64>,
+    pub selected_abs_rt_diff_to_target: Option<f64>,
+    pub selected_abs_rt_diff_to_reference: Option<f64>,
+    pub candidates: Vec<PeakMappingCandidateDebug>,
+}
+
+#[derive(Debug, Clone)]
+struct FlattenedFeatureCandidate {
+    feature_id: i64,
+    rt: f64,
+    left_width: f64,
+    right_width: f64,
+    intensity: Option<f64>,
+    normalized_summed_intensity: Option<f64>,
+    peakgroup_rank: Option<i32>,
+    qvalue: Option<f64>,
 }
 
 /// Maps peaks across aligned chromatograms using the alignment information.
@@ -456,6 +505,104 @@ pub fn map_peaks_across_runs(
         .collect()
 }
 
+pub fn inspect_peak_mapping_candidates(
+    aligned_chrom: &AlignedChromatogram,
+    reference_features: &[FeatureData],
+    aligned_features: &[FeatureData],
+    rt_tolerance: f64,
+    alignment_config: &AlignmentConfig,
+) -> Vec<PeakMappingInspection> {
+    if reference_features.is_empty() || aligned_features.is_empty() {
+        return Vec::new();
+    }
+
+    let ref_feature = &reference_features[0];
+    let ref_len = value_entry_len(&ref_feature.exp_rt);
+    let flattened_candidates = flatten_feature_candidates(aligned_features);
+
+    (0..ref_len)
+        .filter_map(|i| {
+            let reference_feature_id = optional_value_entry_at(ref_feature.feature_id.as_ref(), i)?;
+            let reference_rt = value_entry_at(&ref_feature.exp_rt, i)?;
+            let reference_left_width = optional_value_entry_at(ref_feature.left_width.as_ref(), i)?;
+            let reference_right_width = optional_value_entry_at(ref_feature.right_width.as_ref(), i)?;
+            let mapped_target_rt = map_retention_time(reference_rt, &aligned_chrom.rt_mapping);
+            let roundtrip_reference_rt =
+                reverse_rt_mapping(mapped_target_rt, aligned_chrom, alignment_config);
+            let roundtrip_error = roundtrip_reference_rt.map(|rt| (rt - reference_rt).abs());
+
+            let selected = find_closest_feature(mapped_target_rt, aligned_features, rt_tolerance);
+
+            let mut candidates: Vec<PeakMappingCandidateDebug> = flattened_candidates
+                .iter()
+                .map(|candidate| PeakMappingCandidateDebug {
+                    candidate_rank: 0,
+                    aligned_feature_id: candidate.feature_id,
+                    aligned_rt: candidate.rt,
+                    aligned_left_width: candidate.left_width,
+                    aligned_right_width: candidate.right_width,
+                    abs_rt_diff_to_target: (candidate.rt - mapped_target_rt).abs(),
+                    abs_rt_diff_to_reference: (candidate.rt - reference_rt).abs(),
+                    within_tolerance: (candidate.rt - mapped_target_rt).abs() <= rt_tolerance,
+                    selected_by_current_logic: selected
+                        .as_ref()
+                        .map(|(feature_id, rt, left_width, right_width)| {
+                            *feature_id == candidate.feature_id
+                                && (candidate.rt - *rt).abs() < 1e-6
+                                && (candidate.left_width - *left_width).abs() < 1e-6
+                                && (candidate.right_width - *right_width).abs() < 1e-6
+                        })
+                        .unwrap_or(false),
+                    intensity: candidate.intensity,
+                    normalized_summed_intensity: candidate.normalized_summed_intensity,
+                    peakgroup_rank: candidate.peakgroup_rank,
+                    qvalue: candidate.qvalue,
+                })
+                .collect();
+
+            candidates.sort_by(|a, b| {
+                a.abs_rt_diff_to_target
+                    .partial_cmp(&b.abs_rt_diff_to_target)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(a.aligned_feature_id.cmp(&b.aligned_feature_id))
+            });
+            for (candidate_rank, candidate) in candidates.iter_mut().enumerate() {
+                candidate.candidate_rank = candidate_rank + 1;
+            }
+
+            let candidate_total_count = candidates.len();
+            let candidate_within_tolerance_count = candidates
+                .iter()
+                .filter(|candidate| candidate.within_tolerance)
+                .count();
+            let selected_candidate = candidates
+                .iter()
+                .find(|candidate| candidate.selected_by_current_logic);
+
+            Some(PeakMappingInspection {
+                alignment_id: i as i64,
+                reference_feature_id,
+                reference_rt,
+                reference_left_width,
+                reference_right_width,
+                mapped_target_rt,
+                roundtrip_reference_rt,
+                roundtrip_error,
+                lag: aligned_chrom.lag,
+                candidate_total_count,
+                candidate_within_tolerance_count,
+                selected_feature_id: selected_candidate.map(|candidate| candidate.aligned_feature_id),
+                selected_feature_rt: selected_candidate.map(|candidate| candidate.aligned_rt),
+                selected_abs_rt_diff_to_target: selected_candidate
+                    .map(|candidate| candidate.abs_rt_diff_to_target),
+                selected_abs_rt_diff_to_reference: selected_candidate
+                    .map(|candidate| candidate.abs_rt_diff_to_reference),
+                candidates,
+            })
+        })
+        .collect()
+}
+
 /// Removes overlapping peaks within the same run by comparing peak boundaries.
 fn remove_overlapping_peaks(peak_mappings: Vec<PeakMapping>) -> Vec<PeakMapping> {
     let mut filtered_peaks = Vec::new();
@@ -678,6 +825,48 @@ fn find_closest_feature(
             diff1.partial_cmp(diff2).unwrap_or(std::cmp::Ordering::Equal)
         })
         .map(|(id, rt, left, right, _)| (id, rt, left, right))
+}
+
+fn flatten_feature_candidates(features: &[FeatureData]) -> Vec<FlattenedFeatureCandidate> {
+    features
+        .iter()
+        .flat_map(|feature| {
+            let len = value_entry_len(&feature.exp_rt);
+            (0..len).filter_map(move |idx| {
+                Some(FlattenedFeatureCandidate {
+                    feature_id: optional_value_entry_at(feature.feature_id.as_ref(), idx)?,
+                    rt: value_entry_at(&feature.exp_rt, idx)?,
+                    left_width: optional_value_entry_at(feature.left_width.as_ref(), idx)?,
+                    right_width: optional_value_entry_at(feature.right_width.as_ref(), idx)?,
+                    intensity: optional_value_entry_at(feature.intensity.as_ref(), idx),
+                    normalized_summed_intensity: optional_value_entry_at(
+                        feature.normalized_summed_intensity.as_ref(),
+                        idx,
+                    ),
+                    peakgroup_rank: optional_value_entry_at(feature.rank.as_ref(), idx),
+                    qvalue: optional_value_entry_at(feature.qvalue.as_ref(), idx),
+                })
+            })
+        })
+        .collect()
+}
+
+fn value_entry_len<T>(entry: &ValueEntryType<T>) -> usize {
+    match entry {
+        ValueEntryType::Single(_) => 1,
+        ValueEntryType::Multiple(values) => values.len(),
+    }
+}
+
+fn value_entry_at<T: Copy>(entry: &ValueEntryType<T>, idx: usize) -> Option<T> {
+    match entry {
+        ValueEntryType::Single(value) => (idx == 0).then_some(*value),
+        ValueEntryType::Multiple(values) => values.get(idx).copied(),
+    }
+}
+
+fn optional_value_entry_at<T: Copy>(entry: Option<&ValueEntryType<T>>, idx: usize) -> Option<T> {
+    entry.and_then(|entry| value_entry_at(entry, idx))
 }
 
 
@@ -937,13 +1126,10 @@ pub fn reverse_rt_mapping(
         }
         "fftdtw" => {
             log::debug!("Getting original RT for aligned RT: {} using FFT-DTW alignment", aligned_rt);
-            let lag = aligned_chromatogram.lag? as f64;
-            let shifted_rt = (aligned_rt + lag) as f32;
-            
             let closest_index = find_closest_index_by(
                 &aligned_chromatogram.rt_mapping,
                 |pair| pair.rt2,
-                shifted_rt
+                aligned_rt_f32
             )?;
             
             Some(aligned_chromatogram.rt_mapping[closest_index].rt1 as f64)

@@ -5,8 +5,9 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::Path;
 
-use arycal_common::config::{AlignmentConfig, FeaturesConfig, FeaturesFileType, FiltersConfig, XicConfig, XicFileType};
-
+use arycal_common::config::{
+    AlignmentConfig, FeaturesConfig, FeaturesFileType, FiltersConfig, XicConfig, XicFileType,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -15,7 +16,7 @@ pub struct Input {
     pub features: FeaturesConfig,
     pub filters: FiltersConfig,
     pub alignment: AlignmentConfig,
-    
+
     pub threads: usize,
     pub log_level: String,
 }
@@ -27,27 +28,43 @@ impl Default for Input {
             features: FeaturesConfig::default(),
             filters: FiltersConfig::default(),
             alignment: AlignmentConfig::default(),
-            threads: std::thread::available_parallelism().unwrap().get().saturating_sub(1).max(1),
+            threads: std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(1)
+                    .saturating_sub(1)
+                    .max(1),
             log_level: "info".to_string(),
         }
     }
 }
 
 impl Input {
+    /// Load parameters from a JSON file, infer missing file types, and validate them.
+    pub fn from_config_path(path: &str) -> Result<Self> {
+        let mut input = Input::load(path)
+            .with_context(|| format!("Failed to read parameters from `{path}`"))?;
+
+        input.infer_types()?;
+        input.validate()?;
+
+        if let Some(include_identifying_transitions) = input.filters.include_identifying_transitions
+        {
+            if include_identifying_transitions && !input.alignment.retain_alignment_path {
+                log::warn!("`filters.include-identifying-transitions` is set to true, but `alignment.retain-alignment-path` is not set. Setting `alignment.retain-alignment-path` to true.");
+                input.alignment.retain_alignment_path = true;
+            }
+        }
+
+        Ok(input)
+    }
+
     /// Load parameters from a JSON file and validate them.
     pub fn from_arguments(matches: &ArgMatches) -> Result<Self> {
         let path = matches
             .get_one::<String>("parameters")
             .expect("required parameters");
 
-        let mut input = Input::load(path)
-            .with_context(|| format!("Failed to read parameters from `{path}`"))?;
-
-        // Infer types if not provided
-        input.infer_types()?;
-
-        // Validate the parameters
-        input.validate()?;
+        let mut input = Input::from_config_path(path)?;
 
         // Handle additional command-line arguments for overrides
         if let Some(xic_paths) = matches.get_many::<String>("xic_paths") {
@@ -59,14 +76,6 @@ impl Input {
         log::info!("XIC files: {}", input.xic.len());
         if input.xic.len() > 1 && input.features.len() == 1 {
             log::warn!("Multiple XIC files passed and only one feature file passed. Assuming the feature file contains features for all XIC files.");
-        }
-
-        // Check if optional filters.include_identifying_transitions is set to true, if it is, ensure alignment.retain_alignment_path is set to true as well if it's not, then set it to true
-        if let Some(include_identifying_transitions) = input.filters.include_identifying_transitions {
-            if include_identifying_transitions && !input.alignment.retain_alignment_path {
-                log::warn!("`filters.include-identifying-transitions` is set to true, but `alignment.retain-alignment-path` is not set. Setting `alignment.retain-alignment-path` to true.");
-                input.alignment.retain_alignment_path = true;
-            }
         }
 
         Ok(input)
@@ -119,7 +128,10 @@ impl Input {
     /// Validate the parameters.
     fn validate(&self) -> Result<()> {
         // Validate xic type
-        if self.xic.file_type != Some(XicFileType::SqMass) && self.xic.file_type != Some(XicFileType::Parquet) && self.xic.file_type != Some(XicFileType::Xic) {
+        if self.xic.file_type != Some(XicFileType::SqMass)
+            && self.xic.file_type != Some(XicFileType::Parquet)
+            && self.xic.file_type != Some(XicFileType::Xic)
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Invalid xic type; expected 'sqMass', 'parquet', or 'xic'",
@@ -128,7 +140,9 @@ impl Input {
         }
 
         // Validate features type
-        if self.features.file_type != Some(FeaturesFileType::OSW) && self.features.file_type != Some(FeaturesFileType::OSWPQ) {
+        if self.features.file_type != Some(FeaturesFileType::OSW)
+            && self.features.file_type != Some(FeaturesFileType::OSWPQ)
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(

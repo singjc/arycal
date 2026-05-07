@@ -117,16 +117,17 @@ impl FeaturesConfig {
 pub struct FiltersConfig {
     /// When false, excludes decoy precursors from alignment (only processes targets).
     /// When true, includes both target and decoy precursors in alignment.
-    /// 
+    ///
     /// Old field name was "decoy" with inverted semantics:
     /// - Old "decoy": true meant exclude decoys → New "include_decoys": false
     /// - Old "decoy": false meant include decoys → New "include_decoys": true
-    #[serde(alias = "decoy")] // Support old config files, but they'll be interpreted with new semantics!
+    #[serde(alias = "decoy")]
+    // Support old config files, but they'll be interpreted with new semantics!
     pub include_decoys: bool,
     pub include_identifying_transitions: Option<bool>,
     pub max_score_ms2_qvalue: Option<f64>,
     /// TSV file containing the list of precursors to filter for.
-    pub precursor_ids: Option<String>
+    pub precursor_ids: Option<String>,
 }
 
 impl Default for FiltersConfig {
@@ -165,7 +166,9 @@ pub struct AlignmentConfig {
     pub smoothing: SmoothingConfig,
     /// Retention time mapping tolerance in seconds for mapping aligned query peak to reference peak.
     pub rt_mapping_tolerance: Option<f64>,
-    /// Method to use for mapping decoy peaks. Current options are "shuffle" and "random_regions".
+    /// Method to use for mapping decoy peaks. Current options are
+    /// "shuffle_stratified" (recommended), "candidate_hard_negative", and "random_regions".
+    /// The legacy "shuffle" alias is still accepted and maps to "shuffle_stratified".
     #[serde(rename = "decoy_peak_mapping_method")]
     pub decoy_peak_mapping_method: String,
     /// Size of the window to use for the decoy peak mapping. Only used when the method is "random_regions".
@@ -192,7 +195,7 @@ impl Default for AlignmentConfig {
                 sgolay_order: 3,
             },
             rt_mapping_tolerance: Some(10.0),
-            decoy_peak_mapping_method: "shuffle".to_string(),
+            decoy_peak_mapping_method: "shuffle_stratified".to_string(),
             decoy_window_size: Some(30),
             compute_scores: Some(true),
             scores_output_file: None,
@@ -235,7 +238,6 @@ impl std::fmt::Display for AlignmentConfig {
     }
 }
 
-
 // ****************************
 // GUI Specific Configurations
 
@@ -261,7 +263,7 @@ pub struct VisualizationConfig {
     /// Feature boundaries
     pub peakgroup_qvalue: Option<f32>,
     pub alignment_qvalue: Option<f32>,
-    
+
     /// smoothing parameters
     pub smoothing_enabled: bool,
     pub sgolay_window: usize,
@@ -275,9 +277,9 @@ pub struct VisualizationConfig {
     pub show_grid: bool,
     pub show_legend: bool,
     pub show_axis_labels: bool,
-    pub plot_mode:  PlotMode,
-    pub grid_rows:  usize,
-    pub grid_cols:  usize,
+    pub plot_mode: PlotMode,
+    pub grid_rows: usize,
+    pub grid_cols: usize,
 }
 
 impl Default for VisualizationConfig {
@@ -301,9 +303,9 @@ impl Default for VisualizationConfig {
             show_grid: false,
             show_legend: true,
             show_axis_labels: true,
-            plot_mode:       PlotMode::EmbeddedGrid,
-            grid_rows:       1,
-            grid_cols:       1,
+            plot_mode: PlotMode::EmbeddedGrid,
+            grid_rows: 1,
+            grid_cols: 1,
         }
     }
 }
@@ -323,18 +325,18 @@ pub struct PQPConfig {
     pub tfc_binary_path: PathBuf,
     pub tfc_enabled: bool,
     pub tfc_input: PathBuf,
-    pub tfc_input_type: String,     // "tsv", "mrm", "pqp", "TraML"
+    pub tfc_input_type: String, // "tsv", "mrm", "pqp", "TraML"
     pub tfc_output: PathBuf,
-    pub tfc_output_type: String,    // "tsv", "pqp", "TraML"
+    pub tfc_output_type: String, // "tsv", "pqp", "TraML"
     pub tfc_threads: usize,
     pub tfc_legacy_traml_id: bool,
-    pub tfc_advanced: String,       // any extra flags
+    pub tfc_advanced: String, // any extra flags
 
     // === OpenSwathAssayGenerator params ===
     pub osg_binary_path: PathBuf,
     pub osg_enabled: bool,
     pub osg_input: PathBuf,
-    pub osg_input_type: String,     
+    pub osg_input_type: String,
     pub osg_output: PathBuf,
     pub osg_min_transitions: usize,
     pub osg_max_transitions: usize,
@@ -350,10 +352,10 @@ pub struct PQPConfig {
     pub odg_binary_path: PathBuf,
     pub odg_enabled: bool,
     pub odg_input: PathBuf,
-    pub odg_input_type: String,     
+    pub odg_input_type: String,
     pub odg_output: PathBuf,
-    pub odg_method: String,         // "reverse", "pseudo-reverse", "shuffle", "shift"
-    pub odg_decoy_tag: String,      // e.g. "_DECOY"
+    pub odg_method: String, // "reverse", "pseudo-reverse", "shuffle", "shift"
+    pub odg_decoy_tag: String, // e.g. "_DECOY"
     pub odg_min_decoy_fraction: f32,
     pub odg_aim_decoy_fraction: f32,
     pub odg_shuffle_max_attempts: usize,
@@ -368,7 +370,6 @@ pub struct PQPConfig {
     pub irt_input: PathBuf,
     pub irt_bins: usize,
     pub irt_num_peptides: usize,
-
 }
 
 impl Default for PQPConfig {
@@ -456,7 +457,7 @@ pub struct OpenSwathConfig {
     // Outputs
     #[serde(rename = "output-path")]
     pub output_path: PathBuf,
-    pub output_file_type: String, 
+    pub output_file_type: String,
     pub output_debug_files: bool,
 
     // Parameters
@@ -490,13 +491,12 @@ pub struct OpenSwathConfig {
 
     /// Additional flags to pass directly to the OpenSwathWorkflow binary
     pub advanced_params: String,
-
 }
 
 impl Default for OpenSwathConfig {
     fn default() -> Self {
         OpenSwathConfig {
-            binary_path: PathBuf::from(""), 
+            binary_path: PathBuf::from(""),
             file_type: None,
             file_paths: Vec::new(),
             spectral_library_type: None,
@@ -524,7 +524,11 @@ impl Default for OpenSwathConfig {
             read_options: "cacheWorkingInMemory".to_string(),
             temp_directory: Some(PathBuf::from("./")),
             batch_size: 1000,
-            threads: std::thread::available_parallelism().unwrap().get().saturating_sub(2).max(1),
+            threads: std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1)
+                .saturating_sub(1)
+                .max(1),
             outer_loop_threads: -1,
             rt_normalization_alignment_method: "lowess".to_string(),
             rt_normalization_outlier_method: "none".to_string(),
@@ -606,7 +610,7 @@ pub struct PyProphetConfig {
     pub infer_peptide_experiment_wide: bool,
     pub infer_peptide_run_specific: bool,
     pub infer_protein_global: bool,
-    pub infer_protein_experiment_wide: bool,    
+    pub infer_protein_experiment_wide: bool,
     pub infer_protein_run_specific: bool,
     pub infer_gene_global: bool,
     pub infer_gene_experiment_wide: bool,
@@ -618,7 +622,7 @@ pub struct PyProphetConfig {
     pub infer_peptidoform_max_precursor_peakgroup_pep: f32,
     pub infer_peptidoform_max_transition_pep: f32,
     pub infer_peptidoform_propagate_signal: bool,
-    pub infer_peptidoform_max_alignment_pep: f32, 
+    pub infer_peptidoform_max_alignment_pep: f32,
     pub infer_peptidoform_advanced_params: String,
 
     /// Export Options
@@ -640,7 +644,6 @@ pub struct PyProphetConfig {
     pub export_parquet_output_path: PathBuf,
     pub split_transition_data: bool,
     pub split_runs: bool,
-
 }
 
 impl Default for PyProphetConfig {
