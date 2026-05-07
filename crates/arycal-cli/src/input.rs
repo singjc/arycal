@@ -34,20 +34,31 @@ impl Default for Input {
 }
 
 impl Input {
+    /// Load parameters from a JSON file, infer missing file types, and validate them.
+    pub fn from_config_path(path: &str) -> Result<Self> {
+        let mut input = Input::load(path)
+            .with_context(|| format!("Failed to read parameters from `{path}`"))?;
+
+        input.infer_types()?;
+        input.validate()?;
+
+        if let Some(include_identifying_transitions) = input.filters.include_identifying_transitions {
+            if include_identifying_transitions && !input.alignment.retain_alignment_path {
+                log::warn!("`filters.include-identifying-transitions` is set to true, but `alignment.retain-alignment-path` is not set. Setting `alignment.retain-alignment-path` to true.");
+                input.alignment.retain_alignment_path = true;
+            }
+        }
+
+        Ok(input)
+    }
+
     /// Load parameters from a JSON file and validate them.
     pub fn from_arguments(matches: &ArgMatches) -> Result<Self> {
         let path = matches
             .get_one::<String>("parameters")
             .expect("required parameters");
 
-        let mut input = Input::load(path)
-            .with_context(|| format!("Failed to read parameters from `{path}`"))?;
-
-        // Infer types if not provided
-        input.infer_types()?;
-
-        // Validate the parameters
-        input.validate()?;
+        let mut input = Input::from_config_path(path)?;
 
         // Handle additional command-line arguments for overrides
         if let Some(xic_paths) = matches.get_many::<String>("xic_paths") {
@@ -59,14 +70,6 @@ impl Input {
         log::info!("XIC files: {}", input.xic.len());
         if input.xic.len() > 1 && input.features.len() == 1 {
             log::warn!("Multiple XIC files passed and only one feature file passed. Assuming the feature file contains features for all XIC files.");
-        }
-
-        // Check if optional filters.include_identifying_transitions is set to true, if it is, ensure alignment.retain_alignment_path is set to true as well if it's not, then set it to true
-        if let Some(include_identifying_transitions) = input.filters.include_identifying_transitions {
-            if include_identifying_transitions && !input.alignment.retain_alignment_path {
-                log::warn!("`filters.include-identifying-transitions` is set to true, but `alignment.retain-alignment-path` is not set. Setting `alignment.retain-alignment-path` to true.");
-                input.alignment.retain_alignment_path = true;
-            }
         }
 
         Ok(input)
