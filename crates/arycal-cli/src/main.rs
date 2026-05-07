@@ -6,8 +6,6 @@ use arycal_cli::input::Input;
 use arycal_cli::Runner;
 use arycal_common::config::{AlignmentConfig, FeaturesConfig, FiltersConfig, XicConfig};
 use clap::{Arg, Command, ValueHint};
-#[cfg(not(target_os = "windows"))]
-use rlimit::{setrlimit, Resource};
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
