@@ -46,31 +46,27 @@ use arycal_cloudpath::util::extract_basename;
 //         .collect()
 // }
 
-/// Creates a mapping between the original retention times (RT) of two chromatograms based on the lag.
+/// Creates a mapping between the reference RT space and the original query RT space
+/// from the local-refinement DTW path.
 ///
 /// # Parameters
-/// - `lag`: The lag between the two chromatograms (in points)
-/// - `chrom1`: The reference chromatogram
-/// - `chrom2`: The chromatogram to align
+/// - `optimal_path`: The DTW path between the reference TIC and lag-shifted query TIC.
+/// - `chrom1`: The reference chromatogram.
+/// - `chrom2`: The original query chromatogram.
 ///
 /// # Returns
 /// A vector of aligned RT point pairs
 pub fn create_fft_dtw_rt_mapping(
-    lag: isize,
+    optimal_path: &[(usize, usize)],
     chrom1: &Chromatogram,
     chrom2: &Chromatogram,
 ) -> Vec<AlignedRTPointPair> {
-    chrom1.retention_times
+    optimal_path
         .iter()
-        .enumerate()
-        .filter_map(|(i, &rt1)| {
-            let j = (i as isize + lag) as usize;
-            chrom2.retention_times.get(j).map(|&rt2| {
-                AlignedRTPointPair {
-                    rt1: rt1 as f32,
-                    rt2: rt2 as f32,
-                }
-            })
+        .filter(|&&(i, j)| i > 0 && j > 0)
+        .map(|&(i, j)| AlignedRTPointPair {
+            rt1: chrom1.retention_times[i - 1] as f32,
+            rt2: chrom2.retention_times[j - 1] as f32,
         })
         .collect()
 }
@@ -165,7 +161,9 @@ pub fn star_align_tics_fft_with_local_refinement(
             aligned_chrom.retention_times = refined_rt;
             aligned_chrom.intensities = refined_intensities;
 
-            let mapping = create_fft_dtw_rt_mapping(lag, reference_chrom, &aligned_chrom);
+            // Peak mapping needs a reference->original-query RT map. The DTW path is the
+            // reliable source of that relationship; the display-time shifted/refined trace is not.
+            let mapping = create_fft_dtw_rt_mapping(&path, reference_chrom, chrom);
 
             AlignedChromatogram {
                 chromatogram: aligned_chrom,
