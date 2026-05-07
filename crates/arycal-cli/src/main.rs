@@ -1,16 +1,16 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 
-use clap::{Arg, Command, ValueHint};
 use anyhow::Result;
-use arycal_cli::input::Input; 
+use arycal_cli::input::Input;
 use arycal_cli::Runner;
+use arycal_common::config::{AlignmentConfig, FeaturesConfig, FiltersConfig, XicConfig};
+use clap::{Arg, Command, ValueHint};
+#[cfg(not(target_os = "windows"))]
+use rlimit::{setrlimit, Resource};
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
-#[cfg(not(target_os = "windows"))]
-use rlimit::{Resource, setrlimit};
-use arycal_common::config::{AlignmentConfig, FeaturesConfig, FiltersConfig, XicConfig};
 
 fn generate_config_template(path: &str) -> Result<()> {
     // Create a default Input with only core alignment fields
@@ -19,13 +19,17 @@ fn generate_config_template(path: &str) -> Result<()> {
         features: FeaturesConfig::default(),
         filters: FiltersConfig::default(),
         alignment: AlignmentConfig::default(),
-        threads: std::thread::available_parallelism().unwrap().get().saturating_sub(1).max(1),
+        threads: std::thread::available_parallelism()
+            .unwrap()
+            .get()
+            .saturating_sub(1)
+            .max(1),
         log_level: "info".to_string(),
     };
 
     // Serialize to pretty JSON
     let json = serde_json::to_string_pretty(&template_config)?;
-    
+
     // Create documentation to append
     let docs = r#"
 
@@ -59,7 +63,8 @@ fn generate_config_template(path: &str) -> Result<()> {
 #     * sgolay_window: Window size (must be odd, typically 11)
 #     * sgolay_order: Polynomial order (typically 3)
 #   - rt_mapping_tolerance: Retention time tolerance in seconds for peak mapping (10.0 recommended)
-#   - decoy_peak_mapping_method: "shuffle" or "random_regions"
+#   - decoy_peak_mapping_method: "shuffle_stratified" (recommended), "candidate_hard_negative", or "random_regions"
+#     * "shuffle" is still accepted as a backward-compatible alias for "shuffle_stratified"
 #   - decoy_window_size: Window size for random_regions method
 #   - compute_scores: Calculate alignment scores (true recommended)
 #   - scores_output_file: Write scores to separate file (null = write to input file)
@@ -118,7 +123,7 @@ fn increase_limits() -> Result<(), anyhow::Error> {
 
 fn main() -> Result<()> {
     increase_limits()?;
-    
+
     // Initialize logger
     env_logger::Builder::default()
         .filter_level(log::LevelFilter::Error)
@@ -166,13 +171,19 @@ fn main() -> Result<()> {
     if matches.get_one::<String>("parameters").is_none() {
         // Generate template config file
         let template_path = "arycal_config_template.json";
-        
+
         match generate_config_template(template_path) {
             Ok(_) => {
                 eprintln!("\n\u{274C} Error: No configuration file provided!");
-                eprintln!("\n\u{2728} A template configuration file has been generated: {}", template_path);
+                eprintln!(
+                    "\n\u{2728} A template configuration file has been generated: {}",
+                    template_path
+                );
                 eprintln!("\nTo use arycal:");
-                eprintln!("  1. Edit '{}' with your file paths and settings", template_path);
+                eprintln!(
+                    "  1. Edit '{}' with your file paths and settings",
+                    template_path
+                );
                 eprintln!("  2. Run: arycal {}", template_path);
                 eprintln!("\nFor more information, see the documentation or run: arycal --help\n");
                 std::process::exit(1);

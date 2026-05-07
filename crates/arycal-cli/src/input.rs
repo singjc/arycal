@@ -5,8 +5,9 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::Path;
 
-use arycal_common::config::{AlignmentConfig, FeaturesConfig, FeaturesFileType, FiltersConfig, XicConfig, XicFileType};
-
+use arycal_common::config::{
+    AlignmentConfig, FeaturesConfig, FeaturesFileType, FiltersConfig, XicConfig, XicFileType,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -15,7 +16,7 @@ pub struct Input {
     pub features: FeaturesConfig,
     pub filters: FiltersConfig,
     pub alignment: AlignmentConfig,
-    
+
     pub threads: usize,
     pub log_level: String,
 }
@@ -27,7 +28,11 @@ impl Default for Input {
             features: FeaturesConfig::default(),
             filters: FiltersConfig::default(),
             alignment: AlignmentConfig::default(),
-            threads: std::thread::available_parallelism().unwrap().get().saturating_sub(1).max(1),
+            threads: std::thread::available_parallelism()
+                .unwrap()
+                .get()
+                .saturating_sub(1)
+                .max(1),
             log_level: "info".to_string(),
         }
     }
@@ -42,7 +47,8 @@ impl Input {
         input.infer_types()?;
         input.validate()?;
 
-        if let Some(include_identifying_transitions) = input.filters.include_identifying_transitions {
+        if let Some(include_identifying_transitions) = input.filters.include_identifying_transitions
+        {
             if include_identifying_transitions && !input.alignment.retain_alignment_path {
                 log::warn!("`filters.include-identifying-transitions` is set to true, but `alignment.retain-alignment-path` is not set. Setting `alignment.retain-alignment-path` to true.");
                 input.alignment.retain_alignment_path = true;
@@ -122,7 +128,10 @@ impl Input {
     /// Validate the parameters.
     fn validate(&self) -> Result<()> {
         // Validate xic type
-        if self.xic.file_type != Some(XicFileType::SqMass) && self.xic.file_type != Some(XicFileType::Parquet) && self.xic.file_type != Some(XicFileType::Xic) {
+        if self.xic.file_type != Some(XicFileType::SqMass)
+            && self.xic.file_type != Some(XicFileType::Parquet)
+            && self.xic.file_type != Some(XicFileType::Xic)
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Invalid xic type; expected 'sqMass', 'parquet', or 'xic'",
@@ -131,7 +140,9 @@ impl Input {
         }
 
         // Validate features type
-        if self.features.file_type != Some(FeaturesFileType::OSW) && self.features.file_type != Some(FeaturesFileType::OSWPQ) {
+        if self.features.file_type != Some(FeaturesFileType::OSW)
+            && self.features.file_type != Some(FeaturesFileType::OSWPQ)
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(

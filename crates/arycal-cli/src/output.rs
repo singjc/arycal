@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::sync::Arc;
 
-use arycal_common::PeakMapping;
 use arycal_common::chromatogram::AlignedChromatogram;
+use arycal_common::PeakMapping;
 
 /// Writes the mapped peaks to a Parquet file.
 ///
@@ -113,7 +113,6 @@ pub fn write_mapped_peaks_to_parquet(
     let retention_time_deviation_array = Float64Array::from(retention_time_deviation);
     let peak_intensity_ratio_array = Float64Array::from(intensity_ratio);
 
-
     // Create a RecordBatch
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
@@ -160,11 +159,11 @@ pub fn write_mapped_peaks_to_parquet(
 }
 
 /// Writes the aligned chromatograms to a Parquet file.
-/// 
+///
 /// # Parameters
 /// - `aligned_chromatograms`: A slice of AlignedChromatogram structs.
 /// - `output_path`: The path to the output Parquet file.
-/// 
+///
 /// # Returns
 /// A Result containing the success status of the operation.
 pub fn write_aligned_chromatograms_to_parquet(
