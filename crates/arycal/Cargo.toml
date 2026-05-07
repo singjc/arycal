@@ -21,7 +21,6 @@ anyhow = "1.0"
 union-find = "0.4.3"
 rand = "0.9.0"
 rustfft = "6.2.0"
-fftconvolve = "0.1.1"
 dtw_rs = "0.9.5"
 
 # rusqlite = { git="https://github.com/trevyn/rusqlite", branch="wasm32-unknown-unknown", features=["bundled"] }#"0.27.0"

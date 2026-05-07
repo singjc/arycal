@@ -1,10 +1,11 @@
 use anyhow::Error as AnyHowError;
-use ndarray::Array1;
 use rand::prelude::IndexedRandom;
 use rayon::prelude::*;
 use dtw_rs::{Algorithm, DynamicTimeWarping};
 
-use crate::alignment::fast_fourier_lag::{find_lag_with_max_correlation, shift_chromatogram};
+use crate::alignment::fast_fourier_lag::{
+    fft_cross_correlate_full, find_lag_with_max_correlation, shift_chromatogram,
+};
 use arycal_common::chromatogram::{AlignedChromatogram, AlignedRTPointPair, Chromatogram};
 use arycal_common::config::AlignmentConfig;
 use arycal_cloudpath::util::extract_basename;
@@ -113,10 +114,7 @@ pub fn star_align_tics_fft_with_local_refinement(
         &smoothed_tics[*reference_idx]
     };
 
-
-
-    let ref_intensities = Array1::from(reference_chrom.intensities.clone());
-    let ref_rt = &reference_chrom.retention_times;
+    let ref_intensities = reference_chrom.intensities.as_slice();
     let ref_name = reference_chrom.metadata.get("basename").unwrap_or(&reference_chrom.native_id);
 
     // Process chromatograms in parallel
@@ -127,10 +125,7 @@ pub fn star_align_tics_fft_with_local_refinement(
         // })
         .map(|chrom| {
             // Step 1: FFT cross-correlation
-            let query_intensities = Array1::from(chrom.intensities.clone());
-            let cross_corr = fftconvolve::fftcorrelate(&ref_intensities, &query_intensities, fftconvolve::Mode::Full)
-                .unwrap()
-                .to_vec();
+            let cross_corr = fft_cross_correlate_full(ref_intensities, &chrom.intensities);
 
             // Step 2: Find optimal lag
             let lag = find_lag_with_max_correlation(&cross_corr);
@@ -141,7 +136,7 @@ pub fn star_align_tics_fft_with_local_refinement(
             // Step 4: DTW refinement
             let query_intensities_slice = aligned_chrom.intensities.as_slice();
             let dtw = DynamicTimeWarping::between(
-                ref_intensities.as_slice().unwrap(),  // Convert Array1 to slice
+                ref_intensities,
                 query_intensities_slice      // Use slice directly
             );
             let path = dtw.path();

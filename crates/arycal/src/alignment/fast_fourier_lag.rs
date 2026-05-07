@@ -1,9 +1,9 @@
 use anyhow::Error as AnyHowError;
 use arycal_common::chromatogram::AlignedRTPointPair;
-use ndarray::Array1;
 use rand::prelude::IndexedRandom;
-use std::collections::HashSet;
+use rustfft::{num_complex::Complex, FftPlanner};
 use std::f64;
+use std::collections::HashSet;
 use rayon::prelude::*;
 
 use super::alignment::calculate_distance;
@@ -28,6 +28,50 @@ pub fn find_lag_with_max_correlation(cross_corr: &[f64]) -> isize {
         .unwrap();
     let center = cross_corr.len() / 2;
     max_idx as isize - center as isize
+}
+
+/// Computes a full real-valued cross-correlation using FFT.
+///
+/// This matches the lag convention expected by `find_lag_with_max_correlation` by
+/// computing `conv(reference, reverse(query))`, which yields a vector of length
+/// `reference.len() + query.len() - 1`.
+pub(crate) fn fft_cross_correlate_full(reference: &[f64], query: &[f64]) -> Vec<f64> {
+    if reference.is_empty() || query.is_empty() {
+        return Vec::new();
+    }
+
+    let output_len = reference.len() + query.len() - 1;
+    let fft_len = output_len.next_power_of_two();
+
+    let mut planner = FftPlanner::<f64>::new();
+    let forward = planner.plan_fft_forward(fft_len);
+    let inverse = planner.plan_fft_inverse(fft_len);
+
+    let mut reference_freq = vec![Complex::new(0.0, 0.0); fft_len];
+    for (slot, &value) in reference_freq.iter_mut().zip(reference.iter()) {
+        slot.re = value;
+    }
+    forward.process(&mut reference_freq);
+
+    let mut reversed_query_freq = vec![Complex::new(0.0, 0.0); fft_len];
+    for (slot, &value) in reversed_query_freq.iter_mut().zip(query.iter().rev()) {
+        slot.re = value;
+    }
+    forward.process(&mut reversed_query_freq);
+
+    let mut product: Vec<Complex<f64>> = reference_freq
+        .into_iter()
+        .zip(reversed_query_freq)
+        .map(|(lhs, rhs)| lhs * rhs)
+        .collect();
+    inverse.process(&mut product);
+
+    let scale = fft_len as f64;
+    product
+        .into_iter()
+        .take(output_len)
+        .map(|value| value.re / scale)
+        .collect()
 }
 
 // /// Shifts the retention times of a chromatogram by a given lag.
@@ -164,7 +208,7 @@ pub fn star_align_tics_fft(
         &smoothed_tics[*reference_idx]
     };
 
-    let ref_intensities = Array1::from(reference_chrom.intensities.clone());
+    let ref_intensities = &reference_chrom.intensities;
     let ref_name = reference_chrom.metadata.get("basename").unwrap_or(&reference_chrom.native_id);
 
     // Process chromatograms in parallel
@@ -175,11 +219,7 @@ pub fn star_align_tics_fft(
         // })
         .map(|chrom| {
             // FFT cross-correlation
-            let cross_corr = fftconvolve::fftcorrelate(
-                &ref_intensities,
-                &Array1::from(chrom.intensities.clone()),
-                fftconvolve::Mode::Full
-            ).unwrap().to_vec();
+            let cross_corr = fft_cross_correlate_full(ref_intensities, &chrom.intensities);
 
             // Find optimal lag
             let lag = find_lag_with_max_correlation(&cross_corr);
@@ -241,13 +281,7 @@ pub fn progressive_align_tics_fft(
         // );
 
         // Step 1: Perform FFT-based cross-correlation
-        let cross_corr = fftconvolve::fftcorrelate(
-            &Array1::from(aligned_sum.intensities.clone()),
-            &Array1::from(current_tic.intensities.clone()),
-            fftconvolve::Mode::Full,
-        )
-        .unwrap()
-        .to_vec();
+        let cross_corr = fft_cross_correlate_full(&aligned_sum.intensities, &current_tic.intensities);
 
         // Step 2: Find the lag with the maximum correlation
         let lag = find_lag_with_max_correlation(&cross_corr);
@@ -327,13 +361,7 @@ pub fn mst_align_tics_fft(
         // println!("Aligning runs: {:?} and {:?}", chrom1.metadata.get("basename"), chrom2.metadata.get("basename"));
 
         // Step 1: Perform FFT-based cross-correlation
-        let cross_corr = fftconvolve::fftcorrelate(
-            &Array1::from(chrom1.intensities.clone()),
-            &Array1::from(chrom2.intensities.clone()),
-            fftconvolve::Mode::Full,
-        )
-        .unwrap()
-        .to_vec();
+        let cross_corr = fft_cross_correlate_full(&chrom1.intensities, &chrom2.intensities);
 
         let lag = find_lag_with_max_correlation(&cross_corr);
 
@@ -374,4 +402,31 @@ pub fn mst_align_tics_fft(
     }
 
     Ok(aligned_chromatograms)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fft_cross_correlate_full, find_lag_with_max_correlation};
+
+    #[test]
+    fn fft_cross_correlation_finds_positive_lag_when_query_is_early() {
+        let reference = vec![0.0, 0.0, 1.0, 0.0, 0.0];
+        let query = vec![0.0, 1.0, 0.0, 0.0, 0.0];
+
+        let cross_corr = fft_cross_correlate_full(&reference, &query);
+        let lag = find_lag_with_max_correlation(&cross_corr);
+
+        assert_eq!(lag, 1);
+    }
+
+    #[test]
+    fn fft_cross_correlation_finds_negative_lag_when_query_is_late() {
+        let reference = vec![0.0, 1.0, 0.0, 0.0, 0.0];
+        let query = vec![0.0, 0.0, 1.0, 0.0, 0.0];
+
+        let cross_corr = fft_cross_correlate_full(&reference, &query);
+        let lag = find_lag_with_max_correlation(&cross_corr);
+
+        assert_eq!(lag, -1);
+    }
 }
