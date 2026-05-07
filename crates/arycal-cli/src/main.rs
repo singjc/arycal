@@ -20,8 +20,8 @@ fn generate_config_template(path: &str) -> Result<()> {
         filters: FiltersConfig::default(),
         alignment: AlignmentConfig::default(),
         threads: std::thread::available_parallelism()
-            .unwrap()
-            .get()
+            .map(|n| n.get())
+            .unwrap_or(1)
             .saturating_sub(1)
             .max(1),
         log_level: "info".to_string(),

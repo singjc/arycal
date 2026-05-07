@@ -525,9 +525,9 @@ impl Default for OpenSwathConfig {
             temp_directory: Some(PathBuf::from("./")),
             batch_size: 1000,
             threads: std::thread::available_parallelism()
-                .unwrap()
-                .get()
-                .saturating_sub(2)
+                .map(|n| n.get())
+                .unwrap_or(1)
+                .saturating_sub(1)
                 .max(1),
             outer_loop_threads: -1,
             rt_normalization_alignment_method: "lowess".to_string(),
