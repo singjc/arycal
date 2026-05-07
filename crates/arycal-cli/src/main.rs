@@ -13,7 +13,6 @@ use std::io::Write;
 use std::path::PathBuf;
 #[cfg(not(target_os = "windows"))]
 use rlimit::{getrlimit, setrlimit, Resource};
-use arycal_common::config::{AlignmentConfig, FeaturesConfig, FiltersConfig, XicConfig};
 
 fn generate_config_template(path: &str) -> Result<()> {
     // Create a default Input with only core alignment fields
