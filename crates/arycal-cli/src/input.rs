@@ -29,10 +29,10 @@ impl Default for Input {
             filters: FiltersConfig::default(),
             alignment: AlignmentConfig::default(),
             threads: std::thread::available_parallelism()
-                    .map(|n| n.get())
-                    .unwrap_or(1)
-                    .saturating_sub(1)
-                    .max(1),
+                .map(|n| n.get())
+                .unwrap_or(1)
+                .saturating_sub(1)
+                .max(1),
             log_level: "info".to_string(),
         }
     }

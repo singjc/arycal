@@ -16,17 +16,17 @@
 //! ```
 
 use duckdb::{Connection, Result as DuckDbResult};
-use std::path::{Path, PathBuf};
-use std::fs;
-use std::fmt;
-use std::error::Error;
-use std::collections::HashMap;
 use rayon::prelude::*;
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 // Import types from the osw module that we need
-use crate::osw::{PrecursorIdData, FeatureData, ValueEntryType};
+use crate::osw::{FeatureData, PrecursorIdData, ValueEntryType};
 // Import from arycal_common for PeakMapping and AlignedTransitionScores
-use arycal_common::{PeakMapping, AlignedTransitionScores};
+use arycal_common::{AlignedTransitionScores, PeakMapping, PeakMappingCandidate};
 
 /// Custom error type for OSWPQ operations
 #[derive(Debug)]
@@ -40,10 +40,18 @@ pub enum OpenSwathParquetError {
 impl fmt::Display for OpenSwathParquetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            OpenSwathParquetError::DatabaseError(msg) => write!(f, "[OpenSwathParquetError] Database Error: {}", msg),
-            OpenSwathParquetError::FileNotFound(msg) => write!(f, "[OpenSwathParquetError] File Not Found: {}", msg),
-            OpenSwathParquetError::InvalidFormat(msg) => write!(f, "[OpenSwathParquetError] Invalid Format: {}", msg),
-            OpenSwathParquetError::IoError(msg) => write!(f, "[OpenSwathParquetError] IO Error: {}", msg),
+            OpenSwathParquetError::DatabaseError(msg) => {
+                write!(f, "[OpenSwathParquetError] Database Error: {}", msg)
+            }
+            OpenSwathParquetError::FileNotFound(msg) => {
+                write!(f, "[OpenSwathParquetError] File Not Found: {}", msg)
+            }
+            OpenSwathParquetError::InvalidFormat(msg) => {
+                write!(f, "[OpenSwathParquetError] Invalid Format: {}", msg)
+            }
+            OpenSwathParquetError::IoError(msg) => {
+                write!(f, "[OpenSwathParquetError] IO Error: {}", msg)
+            }
         }
     }
 }
@@ -116,23 +124,21 @@ impl OswpqAccess {
     /// * `base_path` - Path to the .oswpqd directory
     pub fn new<P: AsRef<Path>>(base_path: P) -> Result<Self, OpenSwathParquetError> {
         let base_path = base_path.as_ref().to_path_buf();
-        
+
         // Verify the path exists and is a directory
         if !base_path.exists() {
             return Err(OpenSwathParquetError::FileNotFound(
                 base_path.display().to_string(),
             ));
         }
-        
+
         if !base_path.is_dir() {
             return Err(OpenSwathParquetError::InvalidFormat(
                 "OSWPQD path must be a directory".to_string(),
             ));
         }
 
-        let instance = Self {
-            base_path,
-        };
+        let instance = Self { base_path };
 
         // Backup any existing output files from previous runs
         instance.backup_existing_output_files()?;
@@ -141,15 +147,16 @@ impl OswpqAccess {
     }
 
     /// Backup existing output files from previous runs
-    /// 
+    ///
     /// This prevents appending new results to old results from a different run.
     /// Only appends should happen within the same running instance of arycal.
     fn backup_existing_output_files(&self) -> Result<(), OpenSwathParquetError> {
         use std::time::SystemTime;
-        
+
         let output_files = [
             "feature_alignment.parquet",
             "feature_ms2_alignment.parquet",
+            "feature_ms2_alignment_candidates.parquet",
             "feature_transition_alignment.parquet",
         ];
 
@@ -160,13 +167,15 @@ impl OswpqAccess {
 
         for filename in &output_files {
             let file_path = self.base_path.join(filename);
-            
+
             if file_path.exists() {
-                let backup_path = self.base_path.join(format!("{}.old.{}", filename, timestamp));
-                
+                let backup_path = self
+                    .base_path
+                    .join(format!("{}.old.{}", filename, timestamp));
+
                 std::fs::rename(&file_path, &backup_path)
                     .map_err(|e| OpenSwathParquetError::IoError(e.to_string()))?;
-                
+
                 log::info!(
                     "Backed up existing {} to {}",
                     filename,
@@ -209,14 +218,14 @@ impl OswpqAccess {
     /// List all run directories (.oswpq) in the base directory
     pub fn list_runs(&self) -> Result<Vec<String>, OpenSwathParquetError> {
         let mut runs = Vec::new();
-        
+
         let entries = fs::read_dir(&self.base_path)
             .map_err(|e| OpenSwathParquetError::IoError(e.to_string()))?;
 
         for entry in entries {
             let entry = entry.map_err(|e| OpenSwathParquetError::IoError(e.to_string()))?;
             let path = entry.path();
-            
+
             if path.is_dir() {
                 if let Some(name) = path.file_name() {
                     let name_str = name.to_string_lossy().to_string();
@@ -238,7 +247,7 @@ impl OswpqAccess {
         } else {
             format!("{}.oswpq", run_name)
         };
-        
+
         self.base_path
             .join(dir_name)
             .join("precursors_features.parquet")
@@ -252,7 +261,7 @@ impl OswpqAccess {
         } else {
             format!("{}.oswpq", run_name)
         };
-        
+
         self.base_path
             .join(dir_name)
             .join("transition_features.parquet")
@@ -269,7 +278,7 @@ impl OswpqAccess {
 
         for run_name in runs {
             let precursor_path = self.get_precursors_features_path(&run_name);
-            
+
             if !precursor_path.exists() {
                 log::warn!(
                     "Precursors features file not found for run {}: {}",
@@ -340,7 +349,7 @@ impl OswpqAccess {
     /// Fetch all unique precursor IDs from the parquet files
     pub fn fetch_all_precursor_ids(&self) -> Result<Vec<i32>, OpenSwathParquetError> {
         let runs = self.list_runs()?;
-        
+
         if runs.is_empty() {
             return Ok(Vec::new());
         }
@@ -349,10 +358,10 @@ impl OswpqAccess {
 
         // Build a query that unions all precursor IDs from all runs
         let mut union_queries = Vec::new();
-        
+
         for run_name in &runs {
             let precursor_path = self.get_precursors_features_path(run_name);
-            
+
             if precursor_path.exists() {
                 union_queries.push(format!(
                     "SELECT DISTINCT PRECURSOR_ID FROM read_parquet('{}')",
@@ -397,9 +406,8 @@ impl OswpqAccess {
         let conn = self.create_connection()?;
 
         // Create a temporary table with the alignment data
-        conn
-            .execute(
-                r#"
+        conn.execute(
+            r#"
                 CREATE TEMPORARY TABLE alignment_temp (
                     ALIGNMENT_ID BIGINT,
                     RUN_ID BIGINT,
@@ -419,9 +427,9 @@ impl OswpqAccess {
                     DECOY BIGINT
                 )
                 "#,
-                [],
-            )
-            .map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
+            [],
+        )
+        .map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
 
         // Insert features in batches
         let batch_size = 1000;
@@ -439,26 +447,38 @@ impl OswpqAccess {
                         feature.reference_feature_id,
                         feature.aligned_rt,
                         feature.reference_rt,
-                        feature.var_xcorr_coelution_to_reference.map_or("NULL".to_string(), |v| v.to_string()),
-                        feature.var_xcorr_shape_to_reference.map_or("NULL".to_string(), |v| v.to_string()),
-                        feature.var_mi_to_reference.map_or("NULL".to_string(), |v| v.to_string()),
-                        feature.var_xcorr_coelution_to_all.map_or("NULL".to_string(), |v| v.to_string()),
-                        feature.var_xcorr_shape.map_or("NULL".to_string(), |v| v.to_string()),
-                        feature.var_mi_to_all.map_or("NULL".to_string(), |v| v.to_string()),
-                        feature.var_retention_time_deviation.map_or("NULL".to_string(), |v| v.to_string()),
-                        feature.var_peak_intensity_ratio.map_or("NULL".to_string(), |v| v.to_string()),
+                        feature
+                            .var_xcorr_coelution_to_reference
+                            .map_or("NULL".to_string(), |v| v.to_string()),
+                        feature
+                            .var_xcorr_shape_to_reference
+                            .map_or("NULL".to_string(), |v| v.to_string()),
+                        feature
+                            .var_mi_to_reference
+                            .map_or("NULL".to_string(), |v| v.to_string()),
+                        feature
+                            .var_xcorr_coelution_to_all
+                            .map_or("NULL".to_string(), |v| v.to_string()),
+                        feature
+                            .var_xcorr_shape
+                            .map_or("NULL".to_string(), |v| v.to_string()),
+                        feature
+                            .var_mi_to_all
+                            .map_or("NULL".to_string(), |v| v.to_string()),
+                        feature
+                            .var_retention_time_deviation
+                            .map_or("NULL".to_string(), |v| v.to_string()),
+                        feature
+                            .var_peak_intensity_ratio
+                            .map_or("NULL".to_string(), |v| v.to_string()),
                         feature.decoy,
                     )
                 })
                 .collect();
 
-            let insert_query = format!(
-                "INSERT INTO alignment_temp VALUES {}",
-                values.join(", ")
-            );
+            let insert_query = format!("INSERT INTO alignment_temp VALUES {}", values.join(", "));
 
-            conn
-                .execute(&insert_query, [])
+            conn.execute(&insert_query, [])
                 .map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
         }
 
@@ -477,8 +497,7 @@ impl OswpqAccess {
             )
         };
 
-        conn
-            .execute(&export_query, [])
+        conn.execute(&export_query, [])
             .map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
 
         log::info!(
@@ -491,7 +510,7 @@ impl OswpqAccess {
     }
 
     /// Fetch transition IDs for precursors (equivalent to OSW's fetch_transition_ids)
-    /// 
+    ///
     /// This method queries the precursors_features.parquet files to extract precursor metadata
     /// Note: OSWPQ format doesn't have separate transition tables in the same way as OSW,
     /// so this implementation focuses on precursor-level data.
@@ -502,7 +521,7 @@ impl OswpqAccess {
         precursor_ids: Option<Vec<u32>>,
     ) -> Result<Vec<PrecursorIdData>, OpenSwathParquetError> {
         let runs = self.list_runs()?;
-        
+
         if runs.is_empty() {
             log::warn!("No runs found in OSWPQ directory");
             return Ok(Vec::new());
@@ -514,7 +533,7 @@ impl OswpqAccess {
         // Query each run's precursor features
         for run_name in &runs {
             let precursor_path = self.get_precursors_features_path(run_name);
-            
+
             if !precursor_path.exists() {
                 log::warn!("Precursors features file not found for run {}", run_name);
                 continue;
@@ -541,28 +560,37 @@ impl OswpqAccess {
 
             // Add precursor ID filter if provided
             if let Some(ref ids) = precursor_ids {
-                let id_list = ids.iter()
+                let id_list = ids
+                    .iter()
                     .map(|id| id.to_string())
                     .collect::<Vec<_>>()
                     .join(",");
                 query.push_str(&format!(" AND PRECURSOR_ID IN ({})", id_list));
             }
 
-            let mut stmt = conn.prepare(&query)
+            let mut stmt = conn
+                .prepare(&query)
                 .map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
 
-            let precursor_iter = stmt.query_map([], |row| {
-                let precursor_id: i32 = row.get(0)?;
-                let modified_sequence: String = row.get(1)?;
-                let precursor_charge: i32 = row.get(2)?;
-                let decoy: Option<i32> = row.get(3)?;
-                
-                Ok((precursor_id, modified_sequence, precursor_charge, decoy.unwrap_or(0) == 1))
-            }).map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
+            let precursor_iter = stmt
+                .query_map([], |row| {
+                    let precursor_id: i32 = row.get(0)?;
+                    let modified_sequence: String = row.get(1)?;
+                    let precursor_charge: i32 = row.get(2)?;
+                    let decoy: Option<i32> = row.get(3)?;
+
+                    Ok((
+                        precursor_id,
+                        modified_sequence,
+                        precursor_charge,
+                        decoy.unwrap_or(0) == 1,
+                    ))
+                })
+                .map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
 
             for result in precursor_iter {
-                let (precursor_id, modified_sequence, precursor_charge, decoy) = result
-                    .map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
+                let (precursor_id, modified_sequence, precursor_charge, decoy) =
+                    result.map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
 
                 precursor_map.entry(precursor_id).or_insert_with(|| {
                     // OSWPQ doesn't have unmodified sequence readily available
@@ -592,7 +620,7 @@ impl OswpqAccess {
 
         for run_name in runs {
             let precursor_path = self.get_precursors_features_path(&run_name);
-            
+
             if !precursor_path.exists() {
                 log::warn!("Precursors features file not found for run {}", run_name);
                 continue;
@@ -616,25 +644,45 @@ impl OswpqAccess {
                 precursor_path.display()
             );
 
-            let mut stmt = conn.prepare(&query)
+            let mut stmt = conn
+                .prepare(&query)
                 .map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
 
-            let feature_iter = stmt.query_map([precursor_id], |row| {
-                let filename: String = row.get(0)?;
-                let run_id: i64 = row.get(1)?;
-                let precursor_id: i32 = row.get(2)?;
-                let feature_id: i64 = row.get(3)?;
-                let exp_rt: f64 = row.get(4)?;
-                let left_width: f64 = row.get(5)?;
-                let right_width: f64 = row.get(6)?;
-                let intensity: Option<f64> = row.get(7)?;
-                
-                Ok((filename, run_id, precursor_id, feature_id, exp_rt, left_width, right_width, intensity))
-            }).map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
+            let feature_iter = stmt
+                .query_map([precursor_id], |row| {
+                    let filename: String = row.get(0)?;
+                    let run_id: i64 = row.get(1)?;
+                    let precursor_id: i32 = row.get(2)?;
+                    let feature_id: i64 = row.get(3)?;
+                    let exp_rt: f64 = row.get(4)?;
+                    let left_width: f64 = row.get(5)?;
+                    let right_width: f64 = row.get(6)?;
+                    let intensity: Option<f64> = row.get(7)?;
+
+                    Ok((
+                        filename,
+                        run_id,
+                        precursor_id,
+                        feature_id,
+                        exp_rt,
+                        left_width,
+                        right_width,
+                        intensity,
+                    ))
+                })
+                .map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
 
             for result in feature_iter {
-                let (filename, run_id, precursor_id, feature_id, exp_rt, left_width, right_width, intensity) = result
-                    .map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
+                let (
+                    filename,
+                    run_id,
+                    precursor_id,
+                    feature_id,
+                    exp_rt,
+                    left_width,
+                    right_width,
+                    intensity,
+                ) = result.map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
 
                 let entry = feature_data_map.entry(filename.clone()).or_insert_with(|| {
                     FeatureData::new(
@@ -691,7 +739,8 @@ impl OswpqAccess {
         let results: Result<Vec<_>, OpenSwathParquetError> = precursor_run_sets
             .par_iter()
             .map(|(precursor_id, runs)| {
-                let feature_data = self.fetch_full_precursor_feature_data_for_runs(*precursor_id, runs.clone())?;
+                let feature_data =
+                    self.fetch_full_precursor_feature_data_for_runs(*precursor_id, runs.clone())?;
                 Ok((*precursor_id, feature_data))
             })
             .collect();
@@ -708,6 +757,13 @@ impl OswpqAccess {
         // In OSWPQ format, we just need to ensure the base directory exists
         // The actual writing happens in write methods
         log::info!("OSWPQ: MS2 alignment will be written to parquet file");
+        Ok(())
+    }
+
+    pub fn create_feature_ms2_alignment_candidate_table(
+        &self,
+    ) -> Result<(), OpenSwathParquetError> {
+        log::info!("OSWPQ: MS2 alignment candidates will be written to parquet file");
         Ok(())
     }
 
@@ -743,6 +799,140 @@ impl OswpqAccess {
         Ok(())
     }
 
+    pub fn write_ms2_alignment_candidate_batch(
+        &self,
+        candidate_mappings: &[PeakMappingCandidate],
+    ) -> Result<(), OpenSwathParquetError> {
+        if candidate_mappings.is_empty() {
+            return Ok(());
+        }
+
+        let output_path = self
+            .base_path
+            .join("feature_ms2_alignment_candidates.parquet");
+        let conn = self.create_connection()?;
+
+        conn.execute(
+            r#"
+            CREATE TEMPORARY TABLE ms2_alignment_candidates_temp (
+                ALIGNMENT_ID BIGINT,
+                PRECURSOR_ID BIGINT,
+                RUN_ID BIGINT,
+                REFERENCE_FEATURE_ID BIGINT,
+                ALIGNED_FEATURE_ID BIGINT,
+                REFERENCE_RT DOUBLE,
+                MAPPED_TARGET_RT DOUBLE,
+                ALIGNED_RT DOUBLE,
+                REFERENCE_LEFT_WIDTH DOUBLE,
+                REFERENCE_RIGHT_WIDTH DOUBLE,
+                EXPECTED_ALIGNED_LEFT_WIDTH DOUBLE,
+                EXPECTED_ALIGNED_RIGHT_WIDTH DOUBLE,
+                ALIGNED_LEFT_WIDTH DOUBLE,
+                ALIGNED_RIGHT_WIDTH DOUBLE,
+                REFERENCE_FILENAME VARCHAR,
+                ALIGNED_FILENAME VARCHAR,
+                CANDIDATE_RANK INTEGER,
+                CANDIDATE_TOTAL_COUNT INTEGER,
+                CANDIDATE_WITHIN_TOLERANCE_COUNT INTEGER,
+                SELECTED BOOLEAN,
+                WITHIN_TOLERANCE BOOLEAN,
+                CANDIDATE_SCORE DOUBLE,
+                MAPPING_CONFIDENCE DOUBLE,
+                SCORE_MARGIN_TO_NEXT DOUBLE,
+                NORMALIZED_RT_ERROR DOUBLE,
+                ABS_RT_DIFF_TO_TARGET DOUBLE,
+                ABS_RT_DIFF_TO_REFERENCE DOUBLE,
+                ROUNDTRIP_ERROR DOUBLE,
+                RT_SCORE DOUBLE,
+                WIDTH_OVERLAP_SCORE DOUBLE,
+                WIDTH_SIMILARITY_SCORE DOUBLE,
+                INTENSITY_SIMILARITY_SCORE DOUBLE,
+                RANK_SCORE DOUBLE,
+                QVALUE_SCORE DOUBLE,
+                FEATURE_RANK INTEGER,
+                FEATURE_QVALUE DOUBLE,
+                FEATURE_INTENSITY DOUBLE,
+                FEATURE_NORMALIZED_SUMMED_INTENSITY DOUBLE
+            )
+            "#,
+            [],
+        )?;
+
+        let batch_size = 1000;
+        for chunk in candidate_mappings.chunks(batch_size) {
+            let values: Vec<String> = chunk
+                .par_iter()
+                .map(|candidate| {
+                    format!(
+                        "({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, '{}', '{}', {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                        candidate.alignment_id,
+                        candidate.precursor_id,
+                        candidate.run_id,
+                        candidate.reference_feature_id,
+                        candidate.aligned_feature_id,
+                        candidate.reference_rt,
+                        candidate.mapped_target_rt,
+                        candidate.aligned_rt,
+                        candidate.reference_left_width,
+                        candidate.reference_right_width,
+                        candidate.expected_aligned_left_width,
+                        candidate.expected_aligned_right_width,
+                        candidate.aligned_left_width,
+                        candidate.aligned_right_width,
+                        candidate.reference_filename.replace('\'', "''"),
+                        candidate.aligned_filename.replace('\'', "''"),
+                        candidate.candidate_rank,
+                        candidate.candidate_total_count,
+                        candidate.candidate_within_tolerance_count,
+                        candidate.selected,
+                        candidate.within_tolerance,
+                        candidate.candidate_score,
+                        candidate.mapping_confidence.map_or("NULL".to_string(), |v| v.to_string()),
+                        candidate.score_margin_to_next.map_or("NULL".to_string(), |v| v.to_string()),
+                        candidate.normalized_rt_error,
+                        candidate.abs_rt_diff_to_target,
+                        candidate.abs_rt_diff_to_reference,
+                        candidate.roundtrip_error.map_or("NULL".to_string(), |v| v.to_string()),
+                        candidate.rt_score,
+                        candidate.width_overlap_score,
+                        candidate.width_similarity_score,
+                        candidate.intensity_similarity_score.map_or("NULL".to_string(), |v| v.to_string()),
+                        candidate.rank_score.map_or("NULL".to_string(), |v| v.to_string()),
+                        candidate.qvalue_score.map_or("NULL".to_string(), |v| v.to_string()),
+                        candidate.feature_rank.map_or("NULL".to_string(), |v| v.to_string()),
+                        candidate.feature_qvalue.map_or("NULL".to_string(), |v| v.to_string()),
+                        candidate.feature_intensity.map_or("NULL".to_string(), |v| v.to_string()),
+                        candidate.feature_normalized_summed_intensity.map_or("NULL".to_string(), |v| v.to_string()),
+                    )
+                })
+                .collect();
+
+            let insert_query = format!(
+                "INSERT INTO ms2_alignment_candidates_temp VALUES {}",
+                values.join(", ")
+            );
+
+            conn.execute(&insert_query, [])?;
+        }
+
+        let export_query = if output_path.exists() {
+            format!(
+                "COPY (SELECT * FROM read_parquet('{}') UNION ALL SELECT * FROM ms2_alignment_candidates_temp) TO '{}' (FORMAT PARQUET)",
+                output_path.display(),
+                output_path.display()
+            )
+        } else {
+            format!(
+                "COPY ms2_alignment_candidates_temp TO '{}' (FORMAT PARQUET)",
+                output_path.display()
+            )
+        };
+
+        conn.execute(&export_query, [])?;
+
+        Ok(())
+    }
+
     /// Write MS2 alignment batch to parquet file (detailed format with all PeakMapping fields)
     /// This is an optional extra output format that includes additional fields not in PyProphet format
     #[allow(dead_code)]
@@ -754,7 +944,9 @@ impl OswpqAccess {
             return Ok(());
         }
 
-        let output_path = self.base_path.join("feature_ms2_alignment_detailed.parquet");
+        let output_path = self
+            .base_path
+            .join("feature_ms2_alignment_detailed.parquet");
         let conn = self.create_connection()?;
 
         // Create temporary table
@@ -786,7 +978,8 @@ impl OswpqAccess {
             )
             "#,
             [],
-        ).map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
+        )
+        .map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
 
         // Insert data in batches
         let batch_size = 1000;
@@ -891,7 +1084,8 @@ impl OswpqAccess {
             )
             "#,
             [],
-        ).map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
+        )
+        .map_err(|e| OpenSwathParquetError::DatabaseError(e.to_string()))?;
 
         // Insert data in batches
         let batch_size = 1000;
@@ -907,14 +1101,20 @@ impl OswpqAccess {
                         ts.run_id,
                         ts.aligned_filename.replace("'", "''"),
                         ts.label,
-                        ts.xcorr_coelution_to_ref.map_or("NULL".to_string(), |v| v.to_string()),
-                        ts.xcorr_shape_to_ref.map_or("NULL".to_string(), |v| v.to_string()),
+                        ts.xcorr_coelution_to_ref
+                            .map_or("NULL".to_string(), |v| v.to_string()),
+                        ts.xcorr_shape_to_ref
+                            .map_or("NULL".to_string(), |v| v.to_string()),
                         ts.mi_to_ref.map_or("NULL".to_string(), |v| v.to_string()),
-                        ts.xcorr_coelution_to_all.map_or("NULL".to_string(), |v| v.to_string()),
-                        ts.xcorr_shape_to_all.map_or("NULL".to_string(), |v| v.to_string()),
+                        ts.xcorr_coelution_to_all
+                            .map_or("NULL".to_string(), |v| v.to_string()),
+                        ts.xcorr_shape_to_all
+                            .map_or("NULL".to_string(), |v| v.to_string()),
                         ts.mi_to_all.map_or("NULL".to_string(), |v| v.to_string()),
-                        ts.rt_deviation.map_or("NULL".to_string(), |v| v.to_string()),
-                        ts.intensity_ratio.map_or("NULL".to_string(), |v| v.to_string()),
+                        ts.rt_deviation
+                            .map_or("NULL".to_string(), |v| v.to_string()),
+                        ts.intensity_ratio
+                            .map_or("NULL".to_string(), |v| v.to_string()),
                     )
                 })
                 .collect();

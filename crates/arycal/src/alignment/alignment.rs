@@ -1,13 +1,16 @@
-use std::collections::HashMap;
-use std::f64;
 use arycal_common::chromatogram::AlignedRTPointPair;
 use arycal_common::config::AlignmentConfig;
-use union_find::{QuickFindUf, UnionBySize, UnionFind};
 use rayon::prelude::*;
+use std::collections::{HashMap, HashSet};
+use std::f64;
+use union_find::{QuickFindUf, UnionBySize, UnionFind};
 
 use arycal_cloudpath::osw::{FeatureData, ValueEntryType};
 use arycal_cloudpath::sqmass::TransitionGroup;
-use arycal_common::{chromatogram::{Chromatogram, AlignedChromatogram, apply_common_rt_space_single}, PeakMapping};
+use arycal_common::{
+    chromatogram::{apply_common_rt_space_single, AlignedChromatogram, Chromatogram},
+    PeakMapping, PeakMappingCandidate,
+};
 
 use super::fast_fourier_lag::shift_chromatogram;
 
@@ -77,7 +80,6 @@ impl From<ValueType> for String {
     }
 }
 
-
 /// Enum for the alignment method. Either DTW, FFT or FFT-DTW.
 /// FFT-DTW is a hybrid method that uses FFT for cross-correlation and DTW for local refinement.
 #[derive(Debug, Clone)]
@@ -91,7 +93,6 @@ impl Default for AlignmentMethod {
     fn default() -> Self {
         AlignmentMethod::FFT
     }
-    
 }
 
 impl AlignmentMethod {
@@ -102,7 +103,6 @@ impl AlignmentMethod {
             AlignmentMethod::FFTDTW => "fftdtw",
         }
     }
-    
 }
 
 /// Enum for reference method. Either STAR, MST, or PROGRESSIVE.
@@ -120,7 +120,6 @@ impl Default for ReferenceMethod {
     fn default() -> Self {
         ReferenceMethod::STAR
     }
-    
 }
 
 impl ReferenceMethod {
@@ -131,9 +130,7 @@ impl ReferenceMethod {
             ReferenceMethod::PROGRESSIVE => "progressive",
         }
     }
-    
 }
-
 
 /// Calculates the Euclidean distance between two chromatograms.
 ///
@@ -252,6 +249,62 @@ struct FlattenedFeatureCandidate {
     qvalue: Option<f64>,
 }
 
+#[derive(Debug, Clone)]
+struct ReferencePeakDescriptor {
+    alignment_id: i64,
+    precursor_id: i32,
+    run_id: i64,
+    reference_feature_id: i64,
+    reference_rt: f64,
+    reference_left_width: f64,
+    reference_right_width: f64,
+    reference_filename: String,
+    aligned_filename: String,
+    mapped_target_rt: f64,
+    expected_aligned_left_width: f64,
+    expected_aligned_right_width: f64,
+    roundtrip_error: Option<f64>,
+    reference_intensity: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+struct CandidateEdge {
+    alignment_id: i64,
+    precursor_id: i32,
+    run_id: i64,
+    reference_feature_id: i64,
+    aligned_feature_id: i64,
+    reference_rt: f64,
+    mapped_target_rt: f64,
+    aligned_rt: f64,
+    reference_left_width: f64,
+    reference_right_width: f64,
+    expected_aligned_left_width: f64,
+    expected_aligned_right_width: f64,
+    aligned_left_width: f64,
+    aligned_right_width: f64,
+    reference_filename: String,
+    aligned_filename: String,
+    candidate_total_count: usize,
+    candidate_within_tolerance_count: usize,
+    within_tolerance: bool,
+    candidate_score: f64,
+    normalized_rt_error: f64,
+    abs_rt_diff_to_target: f64,
+    abs_rt_diff_to_reference: f64,
+    roundtrip_error: Option<f64>,
+    rt_score: f64,
+    width_overlap_score: f64,
+    width_similarity_score: f64,
+    intensity_similarity_score: Option<f64>,
+    rank_score: Option<f64>,
+    qvalue_score: Option<f64>,
+    feature_rank: Option<i32>,
+    feature_qvalue: Option<f64>,
+    feature_intensity: Option<f64>,
+    feature_normalized_summed_intensity: Option<f64>,
+}
+
 /// Maps peaks across aligned chromatograms using the alignment information.
 ///
 /// # Parameters
@@ -282,7 +335,6 @@ struct FlattenedFeatureCandidate {
 //             // Reverse the rt_mapping to get the aligned query rt in it's original space
 //             // let original_target_rt = reverse_rt_mapping(target_rt, &aligned_chrom, alignment_config).unwrap();
 
-
 //             log::trace!("Mapping closest aligned query RT: {:?} to reference RT feature: {:?}", target_rt, rt);
 
 //             // Generate alignment_id based on reference_rt (or another unique identifier)
@@ -293,7 +345,7 @@ struct FlattenedFeatureCandidate {
 //             {
 //                 log::trace!("Found query feature (id: {}) mapping to reference feature (id: {}): {} -> {}", aligned_feature_id, ref_feature.feature_id.clone().unwrap().as_multiple().unwrap()[i], aligned_rt, rt);
 
-//                 // TODO: Really shouldn't need to have to validate widths, as these are derived from OpenSwath 
+//                 // TODO: Really shouldn't need to have to validate widths, as these are derived from OpenSwath
 //                 let (validated_left_width_ref, validated_right_width_ref) = validate_widths(
 //                     ref_feature.left_width.as_ref().unwrap().as_multiple().unwrap()[i],
 //                     ref_feature.right_width.as_ref().unwrap().as_multiple().unwrap()[i],
@@ -303,9 +355,9 @@ struct FlattenedFeatureCandidate {
 //                     aligned_left_width,
 //                     aligned_right_width,
 //                 );
-                
+
 //                 peak_mappings.push(PeakMapping {
-//                     alignment_id, 
+//                     alignment_id,
 //                     precursor_id: ref_feature.precursor_id.clone(),
 //                     run_id: aligned_features[0].run_id.clone(),
 //                     reference_feature_id: ref_feature.feature_id.clone().unwrap().as_multiple().unwrap()[i],
@@ -426,83 +478,238 @@ pub fn map_peaks_across_runs(
     rt_tolerance: f64,
     alignment_config: &AlignmentConfig,
 ) -> Vec<PeakMapping> {
-    // Early return if no features to process
+    map_peaks_across_runs_with_confidence(
+        aligned_chrom,
+        reference_features,
+        aligned_features,
+        rt_tolerance,
+        alignment_config,
+    )
+    .0
+}
+
+pub fn map_peaks_across_runs_with_confidence(
+    aligned_chrom: &AlignedChromatogram,
+    reference_features: Vec<FeatureData>,
+    aligned_features: Vec<FeatureData>,
+    rt_tolerance: f64,
+    alignment_config: &AlignmentConfig,
+) -> (Vec<PeakMapping>, Vec<PeakMappingCandidate>) {
     if reference_features.is_empty() || aligned_features.is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
 
-    // log::trace!(
-    //     "There are {} reference features and {} query features to map", 
-    //     reference_features[0].feature_id.as_ref().map(|f| f.as_multiple().len()).unwrap_or(0),
-    //     aligned_features[0].feature_id.as_ref().map(|f| f.as_multiple().len()).unwrap_or(0)
-    // );
-
-    // Pre-extract feature data for faster access
     let ref_feature = &reference_features[0];
     let aligned_feature = &aligned_features[0];
-    
-    let ref_rts = ref_feature.exp_rt.as_multiple().unwrap();
-    let ref_feature_ids = ref_feature.feature_id.as_ref().unwrap().as_multiple();
-    let ref_left_widths = ref_feature.left_width.as_ref().unwrap().as_multiple();
-    let ref_right_widths = ref_feature.right_width.as_ref().unwrap().as_multiple();
+    let flattened_candidates = flatten_feature_candidates(&aligned_features);
+    if flattened_candidates.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
 
-    // Process features in parallel
-    ref_rts.par_iter()
-        .enumerate()
-        .filter_map(|(i, &rt)| {
-            let target_rt = map_retention_time(rt, &aligned_chrom.rt_mapping);
-            // log::trace!(
-            //     "Mapping closest aligned query RT: {:?} to reference RT feature: {:?}", 
-            //     target_rt, rt
-            // );
+    let reference_peaks = flatten_reference_peaks(
+        ref_feature,
+        aligned_feature,
+        aligned_chrom,
+        alignment_config,
+    );
+    if reference_peaks.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
 
-            find_closest_feature(target_rt, &aligned_features, rt_tolerance)
-                .map(|(aligned_feature_id, aligned_rt, aligned_left_width, aligned_right_width)| {
-                    // log::trace!(
-                    //     "Found query feature (id: {}) mapping to reference feature (id: {}): {} -> {}",
-                    //     aligned_feature_id, 
-                    //     ref_feature_ids.unwrap()[i], 
-                    //     aligned_rt, 
-                    //     rt
-                    // );
+    let candidate_rows: Vec<Vec<CandidateEdge>> = reference_peaks
+        .par_iter()
+        .map(|reference_peak| {
+            build_candidate_edges(reference_peak, &flattened_candidates, rt_tolerance)
+        })
+        .collect();
 
-                    let (validated_left_width_ref, validated_right_width_ref) = validate_widths(
-                        ref_left_widths.unwrap()[i],
-                        ref_right_widths.unwrap()[i],
-                    );
+    let mut eligible_edges: Vec<CandidateEdge> = candidate_rows
+        .iter()
+        .flat_map(|rows| rows.iter().filter(|edge| edge.within_tolerance).cloned())
+        .collect();
 
-                    let (validated_left_width_aligned, validated_right_width_aligned) = validate_widths(
-                        aligned_left_width,
-                        aligned_right_width,
-                    );
-                    
-                    PeakMapping {
-                        alignment_id: i as i64,
-                        precursor_id: ref_feature.precursor_id.clone(),
-                        run_id: aligned_feature.run_id.clone(),
-                        reference_feature_id: ref_feature_ids.unwrap()[i],
-                        aligned_feature_id,
-                        reference_rt: rt,
-                        aligned_rt,
-                        reference_left_width: validated_left_width_ref,
-                        reference_right_width: validated_right_width_ref,
-                        aligned_left_width: validated_left_width_aligned,
-                        aligned_right_width: validated_right_width_aligned,
-                        reference_filename: ref_feature.basename.clone(),
-                        aligned_filename: aligned_feature.basename.clone(),
-                        label: 1,
-                        xcorr_coelution_to_ref: None,
-                        xcorr_shape_to_ref: None,
-                        mi_to_ref: None,
-                        xcorr_coelution_to_all: None,
-                        xcorr_shape_to_all: None,
-                        mi_to_all: None,
-                        rt_deviation: None,
-                        intensity_ratio: None,
+    eligible_edges.sort_by(|a, b| {
+        b.candidate_score
+            .partial_cmp(&a.candidate_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(
+                a.abs_rt_diff_to_target
+                    .partial_cmp(&b.abs_rt_diff_to_target)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+            .then(
+                a.feature_rank
+                    .unwrap_or(i32::MAX)
+                    .cmp(&b.feature_rank.unwrap_or(i32::MAX)),
+            )
+            .then(a.aligned_feature_id.cmp(&b.aligned_feature_id))
+    });
+
+    let mut selected_by_alignment_id: HashMap<i64, CandidateEdge> = HashMap::new();
+    let mut used_aligned_feature_ids: HashSet<i64> = HashSet::new();
+    for edge in eligible_edges {
+        if selected_by_alignment_id.contains_key(&edge.alignment_id)
+            || used_aligned_feature_ids.contains(&edge.aligned_feature_id)
+        {
+            continue;
+        }
+        used_aligned_feature_ids.insert(edge.aligned_feature_id);
+        selected_by_alignment_id.insert(edge.alignment_id, edge);
+    }
+
+    let mut selected_peak_mappings = Vec::new();
+    let mut candidate_records = Vec::new();
+
+    for mut rows in candidate_rows {
+        if rows.is_empty() {
+            continue;
+        }
+
+        rows.sort_by(|a, b| {
+            b.candidate_score
+                .partial_cmp(&a.candidate_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(
+                    a.abs_rt_diff_to_target
+                        .partial_cmp(&b.abs_rt_diff_to_target)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                )
+                .then(a.aligned_feature_id.cmp(&b.aligned_feature_id))
+        });
+
+        let alignment_id = rows[0].alignment_id;
+        let selected_edge = selected_by_alignment_id.get(&alignment_id);
+        let second_best_score = selected_edge.and_then(|selected| {
+            rows.iter()
+                .filter(|row| {
+                    row.within_tolerance && row.aligned_feature_id != selected.aligned_feature_id
+                })
+                .map(|row| row.candidate_score)
+                .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        });
+
+        let score_margin = selected_edge.map(|selected| {
+            let next_best = second_best_score.unwrap_or(0.0);
+            (selected.candidate_score - next_best).max(0.0)
+        });
+
+        let mapping_confidence = selected_edge.map(|selected| {
+            let margin = score_margin.unwrap_or(selected.candidate_score);
+            let normalized_margin = if selected.candidate_score > 0.0 {
+                (margin / selected.candidate_score).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let roundtrip_score = selected
+                .roundtrip_error
+                .map(|err| {
+                    if rt_tolerance <= 0.0 {
+                        1.0
+                    } else {
+                        (1.0 - (err / rt_tolerance).clamp(0.0, 1.0)).clamp(0.0, 1.0)
                     }
                 })
-        })
-        .collect()
+                .unwrap_or(0.5);
+            let uniqueness_score = if selected.candidate_within_tolerance_count <= 1 {
+                1.0
+            } else {
+                (1.0 / selected.candidate_within_tolerance_count as f64).clamp(0.0, 1.0)
+            };
+
+            (0.55 * selected.candidate_score
+                + 0.25 * normalized_margin
+                + 0.10 * roundtrip_score
+                + 0.10 * uniqueness_score)
+                .clamp(0.0, 1.0)
+        });
+
+        if let Some(selected) = selected_edge {
+            selected_peak_mappings.push(PeakMapping {
+                alignment_id: selected.alignment_id,
+                precursor_id: selected.precursor_id,
+                run_id: selected.run_id,
+                reference_feature_id: selected.reference_feature_id,
+                aligned_feature_id: selected.aligned_feature_id,
+                reference_rt: selected.reference_rt,
+                aligned_rt: selected.aligned_rt,
+                reference_left_width: selected.reference_left_width,
+                reference_right_width: selected.reference_right_width,
+                aligned_left_width: selected.aligned_left_width,
+                aligned_right_width: selected.aligned_right_width,
+                reference_filename: selected.reference_filename.clone(),
+                aligned_filename: selected.aligned_filename.clone(),
+                label: 1,
+                xcorr_coelution_to_ref: None,
+                xcorr_shape_to_ref: None,
+                mi_to_ref: None,
+                xcorr_coelution_to_all: None,
+                xcorr_shape_to_all: None,
+                mi_to_all: None,
+                rt_deviation: None,
+                intensity_ratio: None,
+                mapped_target_rt: Some(selected.mapped_target_rt),
+                roundtrip_error: selected.roundtrip_error,
+                candidate_total_count: Some(selected.candidate_total_count as i32),
+                candidate_within_tolerance_count: Some(
+                    selected.candidate_within_tolerance_count as i32,
+                ),
+                normalized_rt_error: Some(selected.normalized_rt_error),
+                mapping_score: Some(selected.candidate_score),
+                mapping_confidence,
+                score_margin_to_second_best: score_margin,
+                feature_rank: selected.feature_rank,
+                feature_qvalue: selected.feature_qvalue,
+            });
+        }
+
+        for (candidate_rank, row) in rows.into_iter().enumerate() {
+            let is_selected = selected_edge
+                .map(|selected| selected.aligned_feature_id == row.aligned_feature_id)
+                .unwrap_or(false);
+            candidate_records.push(PeakMappingCandidate {
+                alignment_id: row.alignment_id,
+                precursor_id: row.precursor_id,
+                run_id: row.run_id,
+                reference_feature_id: row.reference_feature_id,
+                aligned_feature_id: row.aligned_feature_id,
+                reference_rt: row.reference_rt,
+                mapped_target_rt: row.mapped_target_rt,
+                aligned_rt: row.aligned_rt,
+                reference_left_width: row.reference_left_width,
+                reference_right_width: row.reference_right_width,
+                expected_aligned_left_width: row.expected_aligned_left_width,
+                expected_aligned_right_width: row.expected_aligned_right_width,
+                aligned_left_width: row.aligned_left_width,
+                aligned_right_width: row.aligned_right_width,
+                reference_filename: row.reference_filename,
+                aligned_filename: row.aligned_filename,
+                candidate_rank: (candidate_rank + 1) as i32,
+                candidate_total_count: row.candidate_total_count as i32,
+                candidate_within_tolerance_count: row.candidate_within_tolerance_count as i32,
+                selected: is_selected,
+                within_tolerance: row.within_tolerance,
+                candidate_score: row.candidate_score,
+                mapping_confidence: is_selected.then_some(mapping_confidence.unwrap_or(0.0)),
+                score_margin_to_next: is_selected.then_some(score_margin.unwrap_or(0.0)),
+                normalized_rt_error: row.normalized_rt_error,
+                abs_rt_diff_to_target: row.abs_rt_diff_to_target,
+                abs_rt_diff_to_reference: row.abs_rt_diff_to_reference,
+                roundtrip_error: row.roundtrip_error,
+                rt_score: row.rt_score,
+                width_overlap_score: row.width_overlap_score,
+                width_similarity_score: row.width_similarity_score,
+                intensity_similarity_score: row.intensity_similarity_score,
+                rank_score: row.rank_score,
+                qvalue_score: row.qvalue_score,
+                feature_rank: row.feature_rank,
+                feature_qvalue: row.feature_qvalue,
+                feature_intensity: row.feature_intensity,
+                feature_normalized_summed_intensity: row.feature_normalized_summed_intensity,
+            });
+        }
+    }
+
+    (selected_peak_mappings, candidate_records)
 }
 
 pub fn inspect_peak_mapping_candidates(
@@ -525,7 +732,8 @@ pub fn inspect_peak_mapping_candidates(
             let reference_feature_id = optional_value_entry_at(ref_feature.feature_id.as_ref(), i)?;
             let reference_rt = value_entry_at(&ref_feature.exp_rt, i)?;
             let reference_left_width = optional_value_entry_at(ref_feature.left_width.as_ref(), i)?;
-            let reference_right_width = optional_value_entry_at(ref_feature.right_width.as_ref(), i)?;
+            let reference_right_width =
+                optional_value_entry_at(ref_feature.right_width.as_ref(), i)?;
             let mapped_target_rt = map_retention_time(reference_rt, &aligned_chrom.rt_mapping);
             let roundtrip_reference_rt =
                 reverse_rt_mapping(mapped_target_rt, aligned_chrom, alignment_config);
@@ -591,7 +799,8 @@ pub fn inspect_peak_mapping_candidates(
                 lag: aligned_chrom.lag,
                 candidate_total_count,
                 candidate_within_tolerance_count,
-                selected_feature_id: selected_candidate.map(|candidate| candidate.aligned_feature_id),
+                selected_feature_id: selected_candidate
+                    .map(|candidate| candidate.aligned_feature_id),
                 selected_feature_rt: selected_candidate.map(|candidate| candidate.aligned_rt),
                 selected_abs_rt_diff_to_target: selected_candidate
                     .map(|candidate| candidate.abs_rt_diff_to_target),
@@ -685,6 +894,16 @@ fn remove_overlapping_peaks(peak_mappings: Vec<PeakMapping>) -> Vec<PeakMapping>
                             mi_to_all: None,
                             rt_deviation: None,
                             intensity_ratio: None,
+                            mapped_target_rt: None,
+                            roundtrip_error: None,
+                            candidate_total_count: None,
+                            candidate_within_tolerance_count: None,
+                            normalized_rt_error: None,
+                            mapping_score: None,
+                            mapping_confidence: None,
+                            score_margin_to_second_best: None,
+                            feature_rank: None,
+                            feature_qvalue: None,
                         };
                         non_overlapping_peaks.pop();
                         non_overlapping_peaks.push(consensus_peak);
@@ -762,7 +981,6 @@ fn remove_overlapping_peaks(peak_mappings: Vec<PeakMapping>) -> Vec<PeakMapping>
 //     mapped_rt
 // }
 
-
 /// Maps a retention time from the reference chromatogram to the aligned chromatogram.
 fn map_retention_time(rt: f64, rt_mapping: &[AlignedRTPointPair]) -> f64 {
     // Handle empty mapping case
@@ -805,9 +1023,13 @@ fn find_closest_feature(
     features: &[FeatureData],
     tolerance: f64,
 ) -> Option<(i64, f64, f64, f64)> {
-    features.iter()
+    features
+        .iter()
         .flat_map(|feature| {
-            feature.exp_rt.as_multiple().unwrap()
+            feature
+                .exp_rt
+                .as_multiple()
+                .unwrap()
                 .iter()
                 .enumerate()
                 .map(|(i, &rt)| {
@@ -816,15 +1038,180 @@ fn find_closest_feature(
                         rt,
                         feature.left_width.as_ref().unwrap().as_multiple().unwrap()[i],
                         feature.right_width.as_ref().unwrap().as_multiple().unwrap()[i],
-                        (rt - target_rt).abs()
+                        (rt - target_rt).abs(),
                     )
                 })
         })
         .filter(|(_, _, _, _, diff)| *diff <= tolerance)
         .min_by(|(_, _, _, _, diff1), (_, _, _, _, diff2)| {
-            diff1.partial_cmp(diff2).unwrap_or(std::cmp::Ordering::Equal)
+            diff1
+                .partial_cmp(diff2)
+                .unwrap_or(std::cmp::Ordering::Equal)
         })
         .map(|(id, rt, left, right, _)| (id, rt, left, right))
+}
+
+fn flatten_reference_peaks(
+    reference_feature: &FeatureData,
+    aligned_feature: &FeatureData,
+    aligned_chrom: &AlignedChromatogram,
+    alignment_config: &AlignmentConfig,
+) -> Vec<ReferencePeakDescriptor> {
+    let len = value_entry_len(&reference_feature.exp_rt);
+    (0..len)
+        .filter_map(|idx| {
+            let reference_feature_id =
+                optional_value_entry_at(reference_feature.feature_id.as_ref(), idx)?;
+            let reference_rt = value_entry_at(&reference_feature.exp_rt, idx)?;
+            let reference_left_width =
+                optional_value_entry_at(reference_feature.left_width.as_ref(), idx)?;
+            let reference_right_width =
+                optional_value_entry_at(reference_feature.right_width.as_ref(), idx)?;
+            let mapped_target_rt = map_retention_time(reference_rt, &aligned_chrom.rt_mapping);
+            let mapped_left_width =
+                map_retention_time(reference_left_width, &aligned_chrom.rt_mapping);
+            let mapped_right_width =
+                map_retention_time(reference_right_width, &aligned_chrom.rt_mapping);
+            let (expected_aligned_left_width, expected_aligned_right_width) =
+                validate_widths(mapped_left_width, mapped_right_width);
+            let roundtrip_error =
+                reverse_rt_mapping(mapped_target_rt, aligned_chrom, alignment_config)
+                    .map(|rt| (rt - reference_rt).abs());
+
+            Some(ReferencePeakDescriptor {
+                alignment_id: idx as i64,
+                precursor_id: reference_feature.precursor_id,
+                run_id: aligned_feature.run_id,
+                reference_feature_id,
+                reference_rt,
+                reference_left_width,
+                reference_right_width,
+                reference_filename: reference_feature.basename.clone(),
+                aligned_filename: aligned_feature.basename.clone(),
+                mapped_target_rt,
+                expected_aligned_left_width,
+                expected_aligned_right_width,
+                roundtrip_error,
+                reference_intensity: optional_value_entry_at(
+                    reference_feature.intensity.as_ref(),
+                    idx,
+                ),
+            })
+        })
+        .collect()
+}
+
+fn build_candidate_edges(
+    reference_peak: &ReferencePeakDescriptor,
+    flattened_candidates: &[FlattenedFeatureCandidate],
+    rt_tolerance: f64,
+) -> Vec<CandidateEdge> {
+    let total_candidates = flattened_candidates.len();
+    let mut all_edges: Vec<CandidateEdge> = flattened_candidates
+        .iter()
+        .map(|candidate| {
+            let abs_rt_diff_to_target = (candidate.rt - reference_peak.mapped_target_rt).abs();
+            let abs_rt_diff_to_reference = (candidate.rt - reference_peak.reference_rt).abs();
+            let within_tolerance = abs_rt_diff_to_target <= rt_tolerance;
+            let expected_width = peak_width(
+                reference_peak.expected_aligned_left_width,
+                reference_peak.expected_aligned_right_width,
+            );
+            let candidate_width = peak_width(candidate.left_width, candidate.right_width);
+            let normalized_rt_error = abs_rt_diff_to_target / expected_width.max(1.0);
+            let rt_score = if rt_tolerance > 0.0 {
+                (1.0 - (abs_rt_diff_to_target / rt_tolerance).clamp(0.0, 1.0)).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let width_overlap_score = interval_overlap_score(
+                reference_peak.expected_aligned_left_width,
+                reference_peak.expected_aligned_right_width,
+                candidate.left_width,
+                candidate.right_width,
+            );
+            let width_similarity_score = (1.0
+                - ((candidate_width - expected_width).abs()
+                    / candidate_width.max(expected_width).max(1.0)))
+            .clamp(0.0, 1.0);
+            let intensity_similarity_score =
+                intensity_similarity_score(reference_peak.reference_intensity, candidate.intensity);
+            let rank_score = candidate
+                .peakgroup_rank
+                .map(|rank| 1.0 / rank.max(1) as f64);
+            let qvalue_score = candidate
+                .qvalue
+                .map(|qvalue| (1.0 - qvalue.clamp(0.0, 1.0)).clamp(0.0, 1.0));
+            let candidate_score = (0.45 * rt_score
+                + 0.20 * width_overlap_score
+                + 0.10 * width_similarity_score
+                + 0.10 * rank_score.unwrap_or(0.5)
+                + 0.10 * qvalue_score.unwrap_or(0.5)
+                + 0.05 * intensity_similarity_score.unwrap_or(0.5))
+            .clamp(0.0, 1.0);
+
+            CandidateEdge {
+                alignment_id: reference_peak.alignment_id,
+                precursor_id: reference_peak.precursor_id,
+                run_id: reference_peak.run_id,
+                reference_feature_id: reference_peak.reference_feature_id,
+                aligned_feature_id: candidate.feature_id,
+                reference_rt: reference_peak.reference_rt,
+                mapped_target_rt: reference_peak.mapped_target_rt,
+                aligned_rt: candidate.rt,
+                reference_left_width: reference_peak.reference_left_width,
+                reference_right_width: reference_peak.reference_right_width,
+                expected_aligned_left_width: reference_peak.expected_aligned_left_width,
+                expected_aligned_right_width: reference_peak.expected_aligned_right_width,
+                aligned_left_width: candidate.left_width,
+                aligned_right_width: candidate.right_width,
+                reference_filename: reference_peak.reference_filename.clone(),
+                aligned_filename: reference_peak.aligned_filename.clone(),
+                candidate_total_count: total_candidates,
+                candidate_within_tolerance_count: 0,
+                within_tolerance,
+                candidate_score,
+                normalized_rt_error,
+                abs_rt_diff_to_target,
+                abs_rt_diff_to_reference,
+                roundtrip_error: reference_peak.roundtrip_error,
+                rt_score,
+                width_overlap_score,
+                width_similarity_score,
+                intensity_similarity_score,
+                rank_score,
+                qvalue_score,
+                feature_rank: candidate.peakgroup_rank,
+                feature_qvalue: candidate.qvalue,
+                feature_intensity: candidate.intensity,
+                feature_normalized_summed_intensity: candidate.normalized_summed_intensity,
+            }
+        })
+        .collect();
+
+    let within_tolerance_count = all_edges
+        .iter()
+        .filter(|edge| edge.within_tolerance)
+        .count();
+    for edge in &mut all_edges {
+        edge.candidate_within_tolerance_count = within_tolerance_count;
+    }
+
+    if within_tolerance_count > 0 {
+        all_edges.retain(|edge| edge.within_tolerance);
+        all_edges
+    } else {
+        all_edges
+            .into_iter()
+            .min_by(|a, b| {
+                a.abs_rt_diff_to_target
+                    .partial_cmp(&b.abs_rt_diff_to_target)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(a.aligned_feature_id.cmp(&b.aligned_feature_id))
+            })
+            .into_iter()
+            .collect()
+    }
 }
 
 fn flatten_feature_candidates(features: &[FeatureData]) -> Vec<FlattenedFeatureCandidate> {
@@ -869,9 +1256,35 @@ fn optional_value_entry_at<T: Copy>(entry: Option<&ValueEntryType<T>>, idx: usiz
     entry.and_then(|entry| value_entry_at(entry, idx))
 }
 
+fn peak_width(left_width: f64, right_width: f64) -> f64 {
+    let (left_width, right_width) = validate_widths(left_width, right_width);
+    (right_width - left_width).abs().max(1.0)
+}
+
+fn interval_overlap_score(a_left: f64, a_right: f64, b_left: f64, b_right: f64) -> f64 {
+    let (a_left, a_right) = validate_widths(a_left, a_right);
+    let (b_left, b_right) = validate_widths(b_left, b_right);
+    let overlap = (a_right.min(b_right) - a_left.max(b_left)).max(0.0);
+    if overlap <= 0.0 {
+        return 0.0;
+    }
+
+    let union = (a_right.max(b_right) - a_left.min(b_left)).max(1.0);
+    (overlap / union).clamp(0.0, 1.0)
+}
+
+fn intensity_similarity_score(
+    reference_intensity: Option<f64>,
+    aligned_intensity: Option<f64>,
+) -> Option<f64> {
+    let reference_intensity = reference_intensity?;
+    let aligned_intensity = aligned_intensity?;
+    let log_ratio = ((aligned_intensity + 1.0).ln() - (reference_intensity + 1.0).ln()).abs();
+    Some((1.0 / (1.0 + log_ratio)).clamp(0.0, 1.0))
+}
 
 /// Applies alignment to a list of transition groups using an existing alignment result.
-/// 
+///
 /// # Parameters
 /// - `transition_groups`: The transition groups to be aligned
 /// - `aligned_chromatograms`: The aligned chromatograms
@@ -881,9 +1294,8 @@ pub fn apply_post_alignment_to_trgrp(
     transition_groups: Vec<TransitionGroup>,
     aligned_chromatograms: &Vec<AlignedChromatogram>,
     common_rt_space: &Vec<f64>,
-    alignment_config: &AlignmentConfig
+    alignment_config: &AlignmentConfig,
 ) -> Vec<TransitionGroup> {
-
     let mut aligned_transition_groups = Vec::new();
 
     for trgrp in transition_groups {
@@ -891,19 +1303,36 @@ pub fn apply_post_alignment_to_trgrp(
 
         let current_filename = trgrp.metadata.get("basename").unwrap();
 
-        let mut aligned_identifying_chromatograms= HashMap::new();
+        let mut aligned_identifying_chromatograms = HashMap::new();
         // Apply post-alignment to each transition in the group
         for (transition_id, transition_xic) in &mut aligned_trgrp.chromatograms {
+            let common_rt_chrom =
+                apply_common_rt_space_single(transition_xic.clone(), &common_rt_space);
 
-            let common_rt_chrom = apply_common_rt_space_single(transition_xic.clone(), &common_rt_space);
+            let smooth_chrom = common_rt_chrom
+                .smooth_sgolay(
+                    alignment_config.smoothing.sgolay_window,
+                    alignment_config.smoothing.sgolay_order,
+                )
+                .unwrap()
+                .normalize()
+                .unwrap();
 
-            let smooth_chrom = common_rt_chrom.smooth_sgolay(alignment_config.smoothing.sgolay_window, alignment_config.smoothing.sgolay_order).unwrap().normalize().unwrap();
+            let query_aligned_chrom = aligned_chromatograms
+                .iter()
+                .find(|chrom| {
+                    chrom.chromatogram.metadata.get("basename").unwrap() == current_filename
+                })
+                .unwrap();
 
-            let query_aligned_chrom = aligned_chromatograms.iter().find(|chrom| chrom.chromatogram.metadata.get("basename").unwrap() == current_filename).unwrap();
+            let aligned_chrom = apply_post_alignment_to_chromatogram(
+                smooth_chrom,
+                query_aligned_chrom.clone(),
+                &alignment_config,
+            );
 
-            let aligned_chrom = apply_post_alignment_to_chromatogram(smooth_chrom, query_aligned_chrom.clone(), &alignment_config);
-
-            aligned_identifying_chromatograms.insert(transition_id.clone(), aligned_chrom.chromatogram);
+            aligned_identifying_chromatograms
+                .insert(transition_id.clone(), aligned_chrom.chromatogram);
         }
 
         aligned_trgrp.chromatograms = aligned_identifying_chromatograms;
@@ -913,14 +1342,13 @@ pub fn apply_post_alignment_to_trgrp(
     aligned_transition_groups
 }
 
-
 /// Applies alignment to a chromatogram using an existing alignment result
-/// 
+///
 /// # Parameters
 /// - `chromatogram`: The chromatogram to be aligned
 /// - `aligned_chromatogram`: The aligned chromatogram
 /// - `alignment_config`: The alignment configuration
-/// 
+///
 /// # Returns
 /// - The aligned chromatogram
 pub fn apply_post_alignment_to_chromatogram(
@@ -932,7 +1360,13 @@ pub fn apply_post_alignment_to_chromatogram(
         "dtw" => {
             let alignment_path = aligned_chromatogram.alignment_path.clone();
 
-            let mut aligned_chrom = AlignedChromatogram { chromatogram: chromatogram.clone(), alignment_path: alignment_path.clone(), lag: None, rt_mapping: aligned_chromatogram.rt_mapping.clone(), reference_basename: aligned_chromatogram.reference_basename.clone() };
+            let mut aligned_chrom = AlignedChromatogram {
+                chromatogram: chromatogram.clone(),
+                alignment_path: alignment_path.clone(),
+                lag: None,
+                rt_mapping: aligned_chromatogram.rt_mapping.clone(),
+                reference_basename: aligned_chromatogram.reference_basename.clone(),
+            };
 
             // Apply the DTW alignment to the query chromatogram
             let (query_rt, query_intensities) = (
@@ -946,23 +1380,29 @@ pub fn apply_post_alignment_to_chromatogram(
                 .iter()
                 .map(|&(_, j)| query_intensities[j])
                 .collect();
-            
+
             aligned_chrom.chromatogram.retention_times = refined_rt;
             aligned_chrom.chromatogram.intensities = refined_intensities;
 
             aligned_chrom
-        },
+        }
         "fft" => {
             let lag = aligned_chromatogram.lag.unwrap();
-            let aligned_chrom = AlignedChromatogram { chromatogram: shift_chromatogram(&chromatogram.clone(), lag), alignment_path: aligned_chromatogram.alignment_path.clone(), lag: Some(lag), rt_mapping: aligned_chromatogram.rt_mapping.clone(), reference_basename: aligned_chromatogram.reference_basename.clone() };
-            
+            let aligned_chrom = AlignedChromatogram {
+                chromatogram: shift_chromatogram(&chromatogram.clone(), lag),
+                alignment_path: aligned_chromatogram.alignment_path.clone(),
+                lag: Some(lag),
+                rt_mapping: aligned_chromatogram.rt_mapping.clone(),
+                reference_basename: aligned_chromatogram.reference_basename.clone(),
+            };
+
             aligned_chrom
-        },
+        }
         "fftdtw" => {
             let alignment_path = aligned_chromatogram.alignment_path.clone();
             let lag = aligned_chromatogram.lag.unwrap();
             let mut aligned_chrom = shift_chromatogram(&chromatogram, lag);
-            
+
             let (query_rt, query_intensities) = (
                 aligned_chrom.retention_times.clone(),
                 aligned_chrom.intensities.clone(),
@@ -979,12 +1419,24 @@ pub fn apply_post_alignment_to_chromatogram(
             aligned_chrom.retention_times = refined_rt;
             aligned_chrom.intensities = refined_intensities;
 
-            AlignedChromatogram { chromatogram: aligned_chrom, alignment_path: alignment_path, lag: Some(lag), rt_mapping: aligned_chromatogram.rt_mapping.clone(), reference_basename: aligned_chromatogram.reference_basename.clone() }
-        },
+            AlignedChromatogram {
+                chromatogram: aligned_chrom,
+                alignment_path: alignment_path,
+                lag: Some(lag),
+                rt_mapping: aligned_chromatogram.rt_mapping.clone(),
+                reference_basename: aligned_chromatogram.reference_basename.clone(),
+            }
+        }
         _ => {
             let alignment_path = aligned_chromatogram.alignment_path.clone();
 
-            let mut aligned_chrom = AlignedChromatogram { chromatogram: chromatogram.clone(), alignment_path: alignment_path.clone(), lag: None, rt_mapping: aligned_chromatogram.rt_mapping.clone(), reference_basename: aligned_chromatogram.reference_basename.clone() };
+            let mut aligned_chrom = AlignedChromatogram {
+                chromatogram: chromatogram.clone(),
+                alignment_path: alignment_path.clone(),
+                lag: None,
+                rt_mapping: aligned_chromatogram.rt_mapping.clone(),
+                reference_basename: aligned_chromatogram.reference_basename.clone(),
+            };
 
             // Apply the DTW alignment to the query chromatogram
             let (query_rt, query_intensities) = (
@@ -998,12 +1450,12 @@ pub fn apply_post_alignment_to_chromatogram(
                 .iter()
                 .map(|&(_, j)| query_intensities[j])
                 .collect();
-            
+
             aligned_chrom.chromatogram.retention_times = refined_rt;
             aligned_chrom.chromatogram.intensities = refined_intensities;
 
             aligned_chrom
-        },
+        }
     };
     aligned_chromatogram
 }
@@ -1022,10 +1474,10 @@ pub fn apply_post_alignment_to_chromatogram(
 //     aligned_chromatogram: &AlignedChromatogram,
 //     alignment_config: &AlignmentConfig,
 // ) -> Option<f64> {
-    
+
 //     match alignment_config.method.to_lowercase().as_str() {
 //         "dtw" => {
-//             log::debug!("Getting original RT for aligned RT: {} using DTW alignment", aligned_rt); 
+//             log::debug!("Getting original RT for aligned RT: {} using DTW alignment", aligned_rt);
 
 //             // Use rt_mapping to get index where target_rt is closest to 'rt1'
 //             let ref_rts = aligned_chromatogram.rt_mapping.iter().map(|m| *m.get("rt1").unwrap()).collect::<Vec<f64>>();
@@ -1089,7 +1541,6 @@ pub fn apply_post_alignment_to_chromatogram(
 //         .map(|(index, _)| index)
 // }
 
-
 /// Reverses the RT mapping to convert an aligned RT back to the original RT space.
 ///
 /// # Parameters
@@ -1105,56 +1556,64 @@ pub fn reverse_rt_mapping(
     alignment_config: &AlignmentConfig,
 ) -> Option<f64> {
     let aligned_rt_f32 = aligned_rt as f32;
-    
+
     match alignment_config.method.to_lowercase().as_str() {
         "dtw" => {
-            log::debug!("Getting original RT for aligned RT: {} using DTW alignment", aligned_rt);
-            
+            log::debug!(
+                "Getting original RT for aligned RT: {} using DTW alignment",
+                aligned_rt
+            );
+
             // Find the point with rt2 closest to aligned_rt
             let closest_index = find_closest_index_by(
                 &aligned_chromatogram.rt_mapping,
                 |pair| pair.rt2,
-                aligned_rt_f32
+                aligned_rt_f32,
             )?;
-            
+
             Some(aligned_chromatogram.rt_mapping[closest_index].rt1 as f64)
         }
         "fft" => {
-            log::debug!("Getting original RT for aligned RT: {} using FFT alignment", aligned_rt);
+            log::debug!(
+                "Getting original RT for aligned RT: {} using FFT alignment",
+                aligned_rt
+            );
             let lag = aligned_chromatogram.lag? as f64;
             Some(aligned_rt + lag)
         }
         "fftdtw" => {
-            log::debug!("Getting original RT for aligned RT: {} using FFT-DTW alignment", aligned_rt);
+            log::debug!(
+                "Getting original RT for aligned RT: {} using FFT-DTW alignment",
+                aligned_rt
+            );
             let closest_index = find_closest_index_by(
                 &aligned_chromatogram.rt_mapping,
                 |pair| pair.rt2,
-                aligned_rt_f32
+                aligned_rt_f32,
             )?;
-            
+
             Some(aligned_chromatogram.rt_mapping[closest_index].rt1 as f64)
         }
         _ => {
-            log::debug!("Getting original RT for aligned RT: {} using default DTW alignment", aligned_rt);
+            log::debug!(
+                "Getting original RT for aligned RT: {} using default DTW alignment",
+                aligned_rt
+            );
             let closest_index = find_closest_index_by(
                 &aligned_chromatogram.rt_mapping,
                 |pair| pair.rt2,
-                aligned_rt_f32
+                aligned_rt_f32,
             )?;
-            
+
             Some(aligned_chromatogram.rt_mapping[closest_index].rt1 as f64)
         }
     }
 }
 
 /// Helper function to find the index of the element with value closest to target
-fn find_closest_index_by<T, F>(
-    slice: &[T],
-    extractor: F,
-    target: f32
-) -> Option<usize>
+fn find_closest_index_by<T, F>(slice: &[T], extractor: F, target: f32) -> Option<usize>
 where
-    F: Fn(&T) -> f32
+    F: Fn(&T) -> f32,
 {
     if slice.is_empty() {
         return None;

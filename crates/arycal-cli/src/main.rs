@@ -6,11 +6,11 @@ use arycal_cli::input::Input;
 use arycal_cli::Runner;
 use arycal_common::config::{AlignmentConfig, FeaturesConfig, FiltersConfig, XicConfig};
 use clap::{Arg, Command, ValueHint};
+#[cfg(not(target_os = "windows"))]
+use rlimit::{getrlimit, setrlimit, Resource};
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
-#[cfg(not(target_os = "windows"))]
-use rlimit::{getrlimit, setrlimit, Resource};
 
 fn generate_config_template(path: &str) -> Result<()> {
     // Create a default Input with only core alignment fields
@@ -65,6 +65,7 @@ fn generate_config_template(path: &str) -> Result<()> {
 #   - rt_mapping_tolerance: Retention time tolerance in seconds for peak mapping (10.0 recommended)
 #   - decoy_peak_mapping_method: "shuffle_stratified" (recommended), "candidate_hard_negative", or "random_regions"
 #     * "shuffle" is still accepted as a backward-compatible alias for "shuffle_stratified"
+#   - compute_decoys: Generate and score decoy peak mappings (false recommended for mapping-confidence filtering)
 #   - decoy_window_size: Window size for random_regions method
 #   - compute_scores: Calculate alignment scores (true recommended)
 #   - scores_output_file: Write scores to separate file (null = write to input file)

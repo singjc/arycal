@@ -1,16 +1,18 @@
+use deepsize::DeepSizeOf;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Error as RusqliteError, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
-use deepsize::DeepSizeOf;
 
-use arycal_common::{AlignedTransitionScores, FullTraceAlignmentScores, PeakMapping};
+use arycal_common::{
+    AlignedTransitionScores, FullTraceAlignmentScores, PeakMapping, PeakMappingCandidate,
+};
 
 /// Define a custom error type
 #[derive(Debug)]
@@ -24,10 +26,18 @@ pub enum OpenSwathSqliteError {
 impl fmt::Display for OpenSwathSqliteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            OpenSwathSqliteError::DatabaseError(msg) => write!(f, "[OpenSwathSqliteError] Database Error: {}", msg),
-            OpenSwathSqliteError::GeneralError(msg) => write!(f, "[OpenSwathSqliteError] Error: {}", msg),
-            OpenSwathSqliteError::RusqliteError(err) => write!(f, "[OpenSwathSqliteError] Rusqlite Error: {}", err),
-            OpenSwathSqliteError::NotFoundError(msg) => write!(f, "[OpenSwathSqliteError] Not Found Error: {}", msg),
+            OpenSwathSqliteError::DatabaseError(msg) => {
+                write!(f, "[OpenSwathSqliteError] Database Error: {}", msg)
+            }
+            OpenSwathSqliteError::GeneralError(msg) => {
+                write!(f, "[OpenSwathSqliteError] Error: {}", msg)
+            }
+            OpenSwathSqliteError::RusqliteError(err) => {
+                write!(f, "[OpenSwathSqliteError] Rusqlite Error: {}", err)
+            }
+            OpenSwathSqliteError::NotFoundError(msg) => {
+                write!(f, "[OpenSwathSqliteError] Not Found Error: {}", msg)
+            }
         }
     }
 }
@@ -45,7 +55,7 @@ impl Error for OpenSwathSqliteError {}
 use std::ops::Deref;
 
 /// Define the ValueEntryType enum to store single or multiple values
-#[derive(Debug, Clone, Serialize, Deserialize, DeepSizeOf )]
+#[derive(Debug, Clone, Serialize, Deserialize, DeepSizeOf)]
 pub enum ValueEntryType<T> {
     Single(T),
     Multiple(Vec<T>),
@@ -120,15 +130,14 @@ pub struct PrecursorPeakBoundaries {
     pub left_width: f64,
     pub right_width: f64,
     pub precursor_id: i64,
-    pub feature_type: String, 
+    pub feature_type: String,
     pub peakgroup_rank: i32,
     pub peakgroup_pep: Option<f64>,
     pub peakgroup_qvalue: Option<f64>,
     pub alignment_pep: Option<f64>,
     pub alignment_qvalue: Option<f64>,
-    pub sorted_feature_id: i64
+    pub sorted_feature_id: i64,
 }
-
 
 /// Extracts the basename without any extensions.
 fn extract_basename(filename: &str) -> String {
@@ -160,21 +169,41 @@ fn value_to_string(v: rusqlite::types::Value) -> String {
 }
 
 /// Convert a rusqlite Value into an i64 for RUN_ID columns.
-fn value_to_i64_for_row(index: usize, name: &str, v: rusqlite::types::Value) -> rusqlite::Result<i64> {
+fn value_to_i64_for_row(
+    index: usize,
+    name: &str,
+    v: rusqlite::types::Value,
+) -> rusqlite::Result<i64> {
     match v {
         rusqlite::types::Value::Integer(i) => Ok(i),
-    rusqlite::types::Value::Text(s) => s.parse::<i64>().map_err(|_| rusqlite::Error::InvalidColumnType(index, name.to_string(), rusqlite::types::Type::Integer)),
+        rusqlite::types::Value::Text(s) => s.parse::<i64>().map_err(|_| {
+            rusqlite::Error::InvalidColumnType(
+                index,
+                name.to_string(),
+                rusqlite::types::Type::Integer,
+            )
+        }),
         rusqlite::types::Value::Blob(b) => {
             let s = String::from_utf8_lossy(&b).to_string();
-            s.parse::<i64>().map_err(|_| rusqlite::Error::InvalidColumnType(index, name.to_string(), rusqlite::types::Type::Integer))
+            s.parse::<i64>().map_err(|_| {
+                rusqlite::Error::InvalidColumnType(
+                    index,
+                    name.to_string(),
+                    rusqlite::types::Type::Integer,
+                )
+            })
         }
         rusqlite::types::Value::Real(f) => Ok(f as i64),
-    rusqlite::types::Value::Null => Err(rusqlite::Error::InvalidColumnType(index, name.to_string(), rusqlite::types::Type::Integer)),
+        rusqlite::types::Value::Null => Err(rusqlite::Error::InvalidColumnType(
+            index,
+            name.to_string(),
+            rusqlite::types::Type::Integer,
+        )),
     }
 }
 
 /// Struct to store feature data for a precursor in a single run i.e. identified peaks, and peak boundaries.
-#[derive(Debug, Clone, Serialize, Deserialize, DeepSizeOf )]
+#[derive(Debug, Clone, Serialize, Deserialize, DeepSizeOf)]
 pub struct FeatureData {
     pub filename: String,
     pub basename: String,
@@ -223,10 +252,9 @@ impl FeatureData {
             normalized_summed_intensity,
         }
     }
-
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, DeepSizeOf )]
+#[derive(Debug, Clone, Serialize, Deserialize, DeepSizeOf)]
 pub struct PrecursorIdData {
     pub precursor_id: i32,
     pub unmodified_sequence: String,
@@ -327,20 +355,20 @@ impl PrecursorIdData {
 #[derive(Clone)]
 pub struct OswAccess {
     pool: Pool<SqliteConnectionManager>,
-    filename_to_id: HashMap<String, rusqlite::types::Value>,  // basename -> RUN.ID value (preserve type: Integer/Text/Blob)
+    filename_to_id: HashMap<String, rusqlite::types::Value>, // basename -> RUN.ID value (preserve type: Integer/Text/Blob)
 }
 
 impl OswAccess {
     /// Constructor to create a new OswAccess instance with a connection pool
-    /// 
+    ///
     /// # Parameters
     /// - `db_path`: Path to the OSW database file
     /// - `init_run_table`: Whether to initialize and cache the RUN table
     pub fn new(db_path: &str, init_run_table: bool) -> Result<Self, OpenSwathSqliteError> {
         let manager = SqliteConnectionManager::file(db_path);
-        
-        let pool = Pool::new(manager)
-            .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
+
+        let pool =
+            Pool::new(manager).map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
 
         // Ensure indexes exist
         Self::ensure_indexes(&pool)?;
@@ -363,28 +391,36 @@ impl OswAccess {
 
     /// Verify or create necessary indexes
     fn ensure_indexes(pool: &Pool<SqliteConnectionManager>) -> Result<(), OpenSwathSqliteError> {
-        let conn = pool.get().map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
-        
+        let conn = pool
+            .get()
+            .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
+
         // Check which tables exist
         let existing_tables: Vec<String> = conn
-        .prepare("SELECT name FROM sqlite_master WHERE type='table'")?
-        .query_map([], |row| row.get(0))?
-        .collect::<Result<_, _>>()?;
+            .prepare("SELECT name FROM sqlite_master WHERE type='table'")?
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
 
         // Create indexes only for existing tables
         let mut index_queries = Vec::new();
 
         if existing_tables.iter().any(|t| t == "FEATURE") {
-            index_queries.push("CREATE INDEX IF NOT EXISTS idx_feature_precursor_id ON FEATURE(PRECURSOR_ID)");
+            index_queries.push(
+                "CREATE INDEX IF NOT EXISTS idx_feature_precursor_id ON FEATURE(PRECURSOR_ID)",
+            );
             index_queries.push("CREATE INDEX IF NOT EXISTS idx_feature_run_id ON FEATURE(RUN_ID)");
         }
 
         if existing_tables.iter().any(|t| t == "FEATURE_MS2") {
-            index_queries.push("CREATE INDEX IF NOT EXISTS idx_feature_ms2_feature_id ON FEATURE_MS2(FEATURE_ID)");
+            index_queries.push(
+                "CREATE INDEX IF NOT EXISTS idx_feature_ms2_feature_id ON FEATURE_MS2(FEATURE_ID)",
+            );
         }
 
         if existing_tables.iter().any(|t| t == "SCORE_MS2") {
-            index_queries.push("CREATE INDEX IF NOT EXISTS idx_score_ms2_feature_id ON SCORE_MS2(FEATURE_ID)");
+            index_queries.push(
+                "CREATE INDEX IF NOT EXISTS idx_score_ms2_feature_id ON SCORE_MS2(FEATURE_ID)",
+            );
         }
 
         // Execute all index creation queries in a transaction
@@ -395,13 +431,16 @@ impl OswAccess {
             }
         }
         tx.commit()?;
-        
+
         Ok(())
     }
 
     /// Loads the RUN table into memory
-    fn load_run_table(pool: &Pool<SqliteConnectionManager>) -> Result<HashMap<String, rusqlite::types::Value>, OpenSwathSqliteError> {
-        let conn = pool.get()
+    fn load_run_table(
+        pool: &Pool<SqliteConnectionManager>,
+    ) -> Result<HashMap<String, rusqlite::types::Value>, OpenSwathSqliteError> {
+        let conn = pool
+            .get()
             .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
         // Read RUN.ID preserving its runtime type (Integer/Text/Blob) so we can
         // use the exact same typed value as a query parameter when matching against FEATURE.RUN_ID.
@@ -468,7 +507,7 @@ impl OswAccess {
                 .and_then(|s| s.to_str())
                 .unwrap_or(&filename)
                 .to_string();
-            
+
             // Handle cases where file_stem() might still have extension (like .gz)
             let basename = if basename.ends_with(".mzML") {
                 basename.trim_end_matches(".mzML").to_string()
@@ -479,14 +518,15 @@ impl OswAccess {
             filename_to_id.insert(basename, id_value);
         }
 
-    log::debug!("Loaded RUN table with {} entries", filename_to_id.len());
+        log::debug!("Loaded RUN table with {} entries", filename_to_id.len());
 
         Ok(filename_to_id)
     }
 
     /// Get RUN_IDs for given basenames
     fn get_run_ids(&self, basenames: &[String]) -> Vec<rusqlite::types::Value> {
-        basenames.iter()
+        basenames
+            .iter()
             .filter_map(|name| self.filename_to_id.get(name))
             .cloned()
             .collect()
@@ -502,26 +542,28 @@ impl OswAccess {
             .pool
             .get()
             .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
-    
+
         // Check for optional tables
         let has_fma: bool = conn.query_row(
             "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='FEATURE_MS2_ALIGNMENT'",
             [],
             |row| row.get(0),
         ).unwrap_or(false);
-        let has_score_ms2: bool = conn.query_row(
-            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='SCORE_MS2'",
-            [],
-            |row| row.get(0),
-        ).unwrap_or(false);
+        let has_score_ms2: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='SCORE_MS2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
         let has_score_alignment: bool = conn.query_row(
             "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='SCORE_ALIGNMENT'",
             [],
             |row| row.get(0),
         ).unwrap_or(false);
-    
+
         let sql: String;
-    
+
         if has_fma {
             // Add optional SCORE_ALIGNMENT subquery
             let mut score_alignment_sub = String::new();
@@ -537,10 +579,10 @@ impl OswAccess {
                         GROUP BY FEATURE_ID
                     ) AS sa
                     ON merged.FEATURE_ID = sa.FEATURE_ID
-                    "#
+                    "#,
                 );
             }
-    
+
             // Add optional SCORE_MS2 join
             let mut score_ms2_join = String::new();
             if has_score_ms2 {
@@ -548,11 +590,12 @@ impl OswAccess {
                     r#"
                     LEFT JOIN SCORE_MS2 AS sms2
                         ON feat.ID = sms2.FEATURE_ID
-                    "#
+                    "#,
                 );
             }
-    
-            sql = format!(r#"
+
+            sql = format!(
+                r#"
                 SELECT 
                     run.FILENAME,
                     DENSE_RANK() OVER (ORDER BY merged.PRECURSOR_ID, merged.ALIGNMENT_ID) AS ALIGNMENT_GROUP_ID,
@@ -604,11 +647,24 @@ impl OswAccess {
                         WHEN 'QUERY' THEN 1 
                     END
             "#,
-            peakgroup_rank = if has_score_ms2 { "sms2.RANK AS PEAKGROUP_RANK," } else { "1 AS PEAKGROUP_RANK," },
-            peakgroup_pep_q = if has_score_ms2 { "sms2.PEP AS PEAKGROUP_PEP, sms2.QVALUE AS PEAKGROUP_QVALUE," } else { "NULL AS PEAKGROUP_PEP, NULL AS PEAKGROUP_QVALUE," },
-            alignment_pep_q = if has_score_alignment { "sa.PEP AS ALIGNMENT_PEP, sa.QVALUE AS ALIGNMENT_QVALUE" } else { "NULL AS ALIGNMENT_PEP, NULL AS ALIGNMENT_QVALUE" },
-            score_alignment = score_alignment_sub,
-            score_ms2 = score_ms2_join);
+                peakgroup_rank = if has_score_ms2 {
+                    "sms2.RANK AS PEAKGROUP_RANK,"
+                } else {
+                    "1 AS PEAKGROUP_RANK,"
+                },
+                peakgroup_pep_q = if has_score_ms2 {
+                    "sms2.PEP AS PEAKGROUP_PEP, sms2.QVALUE AS PEAKGROUP_QVALUE,"
+                } else {
+                    "NULL AS PEAKGROUP_PEP, NULL AS PEAKGROUP_QVALUE,"
+                },
+                alignment_pep_q = if has_score_alignment {
+                    "sa.PEP AS ALIGNMENT_PEP, sa.QVALUE AS ALIGNMENT_QVALUE"
+                } else {
+                    "NULL AS ALIGNMENT_PEP, NULL AS ALIGNMENT_QVALUE"
+                },
+                score_alignment = score_alignment_sub,
+                score_ms2 = score_ms2_join
+            );
         } else {
             // Fallback when FEATURE_MS2_ALIGNMENT doesn't exist
             sql = r#"
@@ -635,11 +691,9 @@ impl OswAccess {
                   AND PRECURSOR.CHARGE = ?2
             "#.to_string();
         }
-    
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(OpenSwathSqliteError::from)?;
-    
+
+        let mut stmt = conn.prepare(&sql).map_err(OpenSwathSqliteError::from)?;
+
         let rows = stmt
             .query_map(params![modified_sequence, precursor_charge], |row| {
                 let filename_value = row.get::<_, rusqlite::types::Value>(0)?;
@@ -659,11 +713,11 @@ impl OswAccess {
                     peakgroup_qvalue: row.get(10)?,
                     alignment_pep: row.get(11)?,
                     alignment_qvalue: row.get(12)?,
-                    sorted_feature_id: row.get::<_, i64>(3)? // temporarily set to FEATURE_ID
+                    sorted_feature_id: row.get::<_, i64>(3)?, // temporarily set to FEATURE_ID
                 })
             })
             .map_err(OpenSwathSqliteError::from)?;
-    
+
         let mut results = Vec::new();
         for r in rows {
             results.push(r?);
@@ -685,30 +739,38 @@ impl OswAccess {
 
             // Sort each group internally: put REFERENCE first, then queries
             for group in grouped.values_mut() {
-                group.sort_by(|a, b| {
-                    match (a.feature_type.as_str(), b.feature_type.as_str()) {
+                group.sort_by(
+                    |a, b| match (a.feature_type.as_str(), b.feature_type.as_str()) {
                         ("REFERENCE", "QUERY") => std::cmp::Ordering::Less,
                         ("QUERY", "REFERENCE") => std::cmp::Ordering::Greater,
-                        _ => a.peakgroup_qvalue
+                        _ => a
+                            .peakgroup_qvalue
                             .unwrap_or(f64::MAX)
                             .partial_cmp(&b.peakgroup_qvalue.unwrap_or(f64::MAX))
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    }
-                });
+                            .unwrap_or(std::cmp::Ordering::Equal),
+                    },
+                );
             }
 
             // Now order the groups by their REFERENCE's q-value
             let mut groups: Vec<Vec<PrecursorPeakBoundaries>> = grouped.into_values().collect();
             groups.sort_by(|a, b| {
-                let qa = a.iter().find(|x| x.feature_type == "REFERENCE").and_then(|x| x.peakgroup_qvalue).unwrap_or(f64::MAX);
-                let qb = b.iter().find(|x| x.feature_type == "REFERENCE").and_then(|x| x.peakgroup_qvalue).unwrap_or(f64::MAX);
+                let qa = a
+                    .iter()
+                    .find(|x| x.feature_type == "REFERENCE")
+                    .and_then(|x| x.peakgroup_qvalue)
+                    .unwrap_or(f64::MAX);
+                let qb = b
+                    .iter()
+                    .find(|x| x.feature_type == "REFERENCE")
+                    .and_then(|x| x.peakgroup_qvalue)
+                    .unwrap_or(f64::MAX);
                 qa.partial_cmp(&qb).unwrap_or(std::cmp::Ordering::Equal)
             });
 
             // Flatten back to results
             results = groups.into_iter().flatten().collect();
-        }
-        else if has_pg {
+        } else if has_pg {
             // Sort by qvalue then rank
             results.sort_by(|a, b| {
                 a.peakgroup_qvalue
@@ -717,10 +779,13 @@ impl OswAccess {
                     .unwrap_or(std::cmp::Ordering::Equal)
                     .then_with(|| a.peakgroup_rank.cmp(&b.peakgroup_rank))
             });
-        }
-        else {
+        } else {
             // Sort by left_width
-            results.sort_by(|a, b| a.left_width.partial_cmp(&b.left_width).unwrap_or(std::cmp::Ordering::Equal));
+            results.sort_by(|a, b| {
+                a.left_width
+                    .partial_cmp(&b.left_width)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
         }
 
         let mut per_run: BTreeMap<String, Vec<&mut PrecursorPeakBoundaries>> = BTreeMap::new();
@@ -729,17 +794,16 @@ impl OswAccess {
         for b in &mut results {
             per_run.entry(b.run_filename.clone()).or_default().push(b);
         }
-        
+
         // Assign incremental ids within each run
         for (_run, features) in per_run {
             for (i, b) in features.into_iter().enumerate() {
                 b.sorted_feature_id = (i + 1) as i64;
             }
         }
-    
+
         Ok(results)
     }
-    
 
     /// Fetches a mapping from each modified peptide sequence to its available precursor charge states.
     ///
@@ -865,7 +929,8 @@ impl OswAccess {
 
         // 2) Fetch all matching precursor IDs
         let mut stmt = conn
-            .prepare(r#"
+            .prepare(
+                r#"
                 SELECT PRECURSOR.ID
                 FROM PRECURSOR
                 INNER JOIN PRECURSOR_PEPTIDE_MAPPING
@@ -874,11 +939,14 @@ impl OswAccess {
                   ON PEPTIDE.ID = PRECURSOR_PEPTIDE_MAPPING.PEPTIDE_ID
                 WHERE PEPTIDE.MODIFIED_SEQUENCE = ?1
                   AND PRECURSOR.CHARGE          = ?2
-            "#)
+            "#,
+            )
             .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
 
         let precursor_ids: Vec<i32> = stmt
-            .query_map(params![modified_sequence, precursor_charge], |row| row.get(0))
+            .query_map(params![modified_sequence, precursor_charge], |row| {
+                row.get(0)
+            })
             .map_err(OpenSwathSqliteError::from)?
             .collect::<Result<_, _>>()
             .map_err(OpenSwathSqliteError::from)?;
@@ -913,8 +981,10 @@ impl OswAccess {
             .prepare(&sql)
             .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
 
-        let params: Vec<&dyn rusqlite::ToSql> =
-            precursor_ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+        let params: Vec<&dyn rusqlite::ToSql> = precursor_ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::ToSql)
+            .collect();
 
         let transition_rows: Vec<(i32, String)> = stmt2
             .query_map(&*params, |row| Ok((row.get(0)?, row.get(1)?)))
@@ -931,7 +1001,7 @@ impl OswAccess {
         if include_precursor {
             for &pid in &precursor_ids {
                 for iso in 0..max_number_of_isotopes {
-                    let native_id  = format!("{}_Precursor_i{}", pid, iso);
+                    let native_id = format!("{}_Precursor_i{}", pid, iso);
                     let annotation = format!("Precursor_i{}", iso);
                     map.insert(native_id, annotation);
                 }
@@ -944,9 +1014,8 @@ impl OswAccess {
         }
 
         Ok(map)
-    }   
-    
-    
+    }
+
     /// Method to fetch precursor id and detecting transition id data from the OSW database
     ///
     /// Parameters
@@ -1505,10 +1574,7 @@ impl OswAccess {
 
         // Add filter for specific runs using RUN_IDs
         if !run_ids.is_empty() {
-            let placeholders = run_ids.iter()
-                .map(|_| "?")
-                .collect::<Vec<_>>()
-                .join(",");
+            let placeholders = run_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
             // Use a CAST to TEXT here as some RUN.ID values may be stored as
             // BLOB containing ASCII digits. Comparing textual representations
             // will match those RUN.ID values when we bind text parameters.
@@ -1518,16 +1584,17 @@ impl OswAccess {
         // Order by EXP_RT
         sql_query.push_str(" ORDER BY FILENAME, EXP_RT");
 
-    log::debug!("SQL Query: {}", sql_query);
+        log::debug!("SQL Query: {}", sql_query);
 
         // Prepare and execute the SQL query
         let mut stmt = conn
             .prepare(&sql_query)
             .map_err(OpenSwathSqliteError::from)?;
 
-    // Build parameters - precursor_id first, then run_ids (Values preserved)
-    let mut params_values: Vec<rusqlite::types::Value> = vec![rusqlite::types::Value::from(precursor_id)];
-    params_values.extend(run_ids.iter().cloned());
+        // Build parameters - precursor_id first, then run_ids (Values preserved)
+        let mut params_values: Vec<rusqlite::types::Value> =
+            vec![rusqlite::types::Value::from(precursor_id)];
+        params_values.extend(run_ids.iter().cloned());
 
         // log::debug!("SQL Query: {}", sql_query);
 
@@ -1545,8 +1612,12 @@ impl OswAccess {
             Option<f64>,
         )> = {
             // Create a slice of &dyn ToSql referencing the values in params_values
-            let params_refs: Vec<&dyn rusqlite::ToSql> = params_values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
-            stmt.query_map(params_refs.as_slice(), |row| {  // Use referenced params slice
+            let params_refs: Vec<&dyn rusqlite::ToSql> = params_values
+                .iter()
+                .map(|v| v as &dyn rusqlite::ToSql)
+                .collect();
+            stmt.query_map(params_refs.as_slice(), |row| {
+                // Use referenced params slice
                 let filename_value = row.get::<_, rusqlite::types::Value>(0)?;
                 let filename = value_to_string(filename_value);
                 let run_id: i64 = row.get(1)?;
@@ -1569,7 +1640,7 @@ impl OswAccess {
                 } else {
                     None
                 };
-                
+
                 Ok((
                     filename,
                     run_id,
@@ -1661,21 +1732,21 @@ impl OswAccess {
     // ) -> Result<HashMap<i32, Vec<FeatureData>>, OpenSwathSqliteError> {
     //     let conn = self.pool.get()
     //         .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
-        
+
     //     // Get all unique precursor IDs
     //     let precursor_ids: Vec<i32> = precursor_run_sets.iter()
     //         .map(|(id, _)| *id)
     //         .collect();
-    
+
     //     // Get all unique run IDs
     //     let all_runs: HashSet<String> = precursor_run_sets.iter()
     //         .flat_map(|(_, runs)| runs.iter().cloned())
     //         .collect();
     //     let run_ids = self.get_run_ids(&all_runs.into_iter().collect::<Vec<_>>());
-    
+
     //     // Build the query
     //     let mut sql_query = r#"
-    //         SELECT 
+    //         SELECT
     //             FILENAME,
     //             RUN.ID AS RUN_ID,
     //             FEATURE.PRECURSOR_ID,
@@ -1685,50 +1756,50 @@ impl OswAccess {
     //             RIGHT_WIDTH,
     //             FEATURE_MS2.AREA_INTENSITY AS INTENSITY
     //     "#.to_string();
-    
+
     //     // Check if SCORE_MS2 table exists
     //     let score_ms2_exists = conn.query_row(
     //         "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='SCORE_MS2'",
     //         params![],
     //         |row| row.get(0),
     //     ).unwrap_or(false);
-    
+
     //     if score_ms2_exists {
     //         sql_query.push_str(", SCORE_MS2.RANK, SCORE_MS2.QVALUE");
     //     }
-    
+
     //     sql_query.push_str(r#"
     //         FROM FEATURE
     //         INNER JOIN RUN ON RUN.ID = FEATURE.RUN_ID
     //         INNER JOIN PRECURSOR ON PRECURSOR.ID = FEATURE.PRECURSOR_ID
     //         INNER JOIN FEATURE_MS2 ON FEATURE_MS2.FEATURE_ID = FEATURE.ID
     //     "#);
-    
+
     //     if score_ms2_exists {
     //         sql_query.push_str(" INNER JOIN SCORE_MS2 ON SCORE_MS2.FEATURE_ID = FEATURE.ID");
     //     }
-    
+
     //     sql_query.push_str(" WHERE FEATURE.PRECURSOR_ID IN (");
     //     sql_query.push_str(&precursor_ids.iter().map(|_| "?").collect::<Vec<_>>().join(","));
     //     sql_query.push_str(")");
-    
+
     //     if !run_ids.is_empty() {
     //         sql_query.push_str(" AND RUN.ID IN (");
     //         sql_query.push_str(&run_ids.iter().map(|_| "?").collect::<Vec<_>>().join(","));
     //         sql_query.push_str(")");
     //     }
-    
+
     //     sql_query.push_str(" ORDER BY FEATURE.PRECURSOR_ID, FILENAME, EXP_RT");
-    
+
     //     // Prepare and execute
     //     let mut stmt = conn.prepare(&sql_query)?;
-        
+
     //     // Build parameters - precursor_ids first, then run_ids
     //     let mut params: Vec<rusqlite::types::Value> = precursor_ids.iter()
     //         .map(|&id| rusqlite::types::Value::from(id))
     //         .collect();
     //     params.extend(run_ids.iter().map(|&id| rusqlite::types::Value::from(id)));
-    
+
     //     // Process results
     //     let mut feature_data_map: HashMap<i32, HashMap<String, FeatureData>> = HashMap::new();
     //     let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
@@ -1740,20 +1811,20 @@ impl OswAccess {
     //         let left_width: f64 = row.get(5)?;
     //         let right_width: f64 = row.get(6)?;
     //         let intensity: f64 = row.get(7)?;
-    
+
     //         // Optional fields (if SCORE_MS2 exists)
     //         let rank_option = if score_ms2_exists {
     //             Some(row.get::<_, i32>(8)?)
     //         } else {
     //             None
     //         };
-    
+
     //         let qvalue_option = if score_ms2_exists {
     //             Some(row.get::<_, f64>(9)?)
     //         } else {
     //             None
     //         };
-            
+
     //         Ok((
     //             precursor_id,
     //             filename,
@@ -1767,7 +1838,7 @@ impl OswAccess {
     //             qvalue_option,
     //         ))
     //     })?;
-    
+
     //     for row in rows {
     //         let (
     //             precursor_id,
@@ -1781,11 +1852,11 @@ impl OswAccess {
     //             rank_option,
     //             qvalue_option,
     //         ) = row?;
-            
+
     //         // Get or create the precursor's feature data map
     //         let precursor_data = feature_data_map.entry(precursor_id)
     //             .or_default();
-            
+
     //         // Get or create the FeatureData for this filename
     //         let feature_data = precursor_data.entry(filename.clone())
     //             .or_insert_with(|| FeatureData::new(
@@ -1801,48 +1872,48 @@ impl OswAccess {
     //                 Some(ValueEntryType::Multiple(vec![])),
     //                 Some(ValueEntryType::Multiple(vec![])),
     //             ));
-    
+
     //         // Push values into their respective vectors
     //         if let Some(ValueEntryType::Multiple(ref mut ids)) = feature_data.feature_id {
     //             ids.push(feature_id);
     //         }
-    
+
     //         if let ValueEntryType::Multiple(ref mut exps) = feature_data.exp_rt {
     //             exps.push(exp_rt);
     //         }
-    
+
     //         if let Some(ValueEntryType::Multiple(ref mut widths)) = feature_data.left_width {
     //             widths.push(left_width);
     //         }
-    
+
     //         if let Some(ValueEntryType::Multiple(ref mut widths)) = feature_data.right_width {
     //             widths.push(right_width);
     //         }
-    
+
     //         if let Some(ValueEntryType::Multiple(ref mut intensities)) = feature_data.intensity {
     //             intensities.push(intensity);
     //         }
-    
+
     //         if let Some(ValueEntryType::Multiple(ref mut ranks)) = feature_data.rank {
     //             if let Some(rank) = rank_option {
     //                 ranks.push(rank);
     //             }
     //         }
-    
+
     //         if let Some(ValueEntryType::Multiple(ref mut qvalues)) = feature_data.qvalue {
     //             if let Some(qvalue) = qvalue_option {
     //                 qvalues.push(qvalue);
     //             }
     //         }
     //     }
-    
+
     //     // Convert to the final HashMap<i32, Vec<FeatureData>> structure
     //     let result = feature_data_map.into_iter()
     //         .map(|(precursor_id, data_map)| {
     //             (precursor_id, data_map.into_values().collect())
     //         })
     //         .collect();
-    
+
     //     Ok(result)
     // }
 
@@ -1850,21 +1921,22 @@ impl OswAccess {
         &self,
         precursor_run_sets: &[(i32, Vec<String>)],
     ) -> Result<HashMap<i32, Vec<FeatureData>>, OpenSwathSqliteError> {
-        let conn = self.pool.get()
+        let conn = self
+            .pool
+            .get()
             .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
-        
+
         // Get all unique precursor IDs
-        let precursor_ids: Vec<i32> = precursor_run_sets.iter()
-            .map(|(id, _)| *id)
-            .collect();
-        
+        let precursor_ids: Vec<i32> = precursor_run_sets.iter().map(|(id, _)| *id).collect();
+
         // Get all unique run basenames requested by the batch
-        let all_runs: HashSet<String> = precursor_run_sets.iter()
+        let all_runs: HashSet<String> = precursor_run_sets
+            .iter()
             .flat_map(|(_, runs)| runs.iter().cloned())
             .collect();
 
-    // Convert to Vec for deterministic logging / parameter order
-    let basenames_vec: Vec<String> = all_runs.iter().cloned().collect();
+        // Convert to Vec for deterministic logging / parameter order
+        let basenames_vec: Vec<String> = all_runs.iter().cloned().collect();
 
         // Log any basenames that do not appear in the cached RUN table mapping
         let missing_basenames: Vec<String> = basenames_vec
@@ -1873,31 +1945,53 @@ impl OswAccess {
             .cloned()
             .collect();
         if !missing_basenames.is_empty() {
-            log::debug!("Basenames requested but missing from RUN table: {:?}", missing_basenames);
+            log::debug!(
+                "Basenames requested but missing from RUN table: {:?}",
+                missing_basenames
+            );
         }
 
-    // Resolve RUN.ID values (preserve underlying Value type)
-    let run_ids = self.get_run_ids(&basenames_vec);
-    log::debug!("Requested basenames: {:?} -> Resolved run_ids: {:?}", basenames_vec, run_ids);
-    log::debug!("Unique basenames count: {}. Sample up to 10: {:?}", basenames_vec.len(), basenames_vec.iter().take(10).collect::<Vec<_>>());
+        // Resolve RUN.ID values (preserve underlying Value type)
+        let run_ids = self.get_run_ids(&basenames_vec);
+        log::debug!(
+            "Requested basenames: {:?} -> Resolved run_ids: {:?}",
+            basenames_vec,
+            run_ids
+        );
+        log::debug!(
+            "Unique basenames count: {}. Sample up to 10: {:?}",
+            basenames_vec.len(),
+            basenames_vec.iter().take(10).collect::<Vec<_>>()
+        );
 
         // Also log per-precursor resolution to aid debugging when a precursor lacks feature data
         for (prec_id, runs) in precursor_run_sets.iter() {
             let resolved = self.get_run_ids(&runs.clone());
             if resolved.is_empty() {
-                log::debug!("Precursor {}: requested runs {:?} -> resolved run_ids []", prec_id, runs);
+                log::debug!(
+                    "Precursor {}: requested runs {:?} -> resolved run_ids []",
+                    prec_id,
+                    runs
+                );
             } else {
-                log::debug!("Precursor {}: requested runs {:?} -> resolved run_ids {:?}", prec_id, runs, resolved);
+                log::debug!(
+                    "Precursor {}: requested runs {:?} -> resolved run_ids {:?}",
+                    prec_id,
+                    runs,
+                    resolved
+                );
             }
         }
-        
+
         // Check if SCORE_MS2 table exists
-        let score_ms2_exists = conn.query_row(
-            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='SCORE_MS2'",
-            params![],
-            |row| row.get(0),
-        ).unwrap_or(false);
-        
+        let score_ms2_exists = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='SCORE_MS2'",
+                params![],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
         // SQLite has a default maximum number of host parameters (SQL variables) of 999.
         // Ensure we don't create a query with more placeholders than allowed by splitting
         // the precursor list into safe-sized chunks: max_vars - run_ids.len().
@@ -1909,14 +2003,18 @@ impl OswAccess {
         // Also cap the chunk size to a reasonable value to avoid pathological very-large IN-lists
         let calculated = if run_ids.len() >= SQLITE_MAX_VARS {
             // Defensive: if run_ids alone exceed the limit, fall back to a small chunk and log
-            log::warn!("Number of run_ids ({}) exceeds SQLITE_MAX_VARS ({}). Queries may fail.", run_ids.len(), SQLITE_MAX_VARS);
+            log::warn!(
+                "Number of run_ids ({}) exceeds SQLITE_MAX_VARS ({}). Queries may fail.",
+                run_ids.len(),
+                SQLITE_MAX_VARS
+            );
             1_usize
         } else {
             SQLITE_MAX_VARS - run_ids.len()
         };
         let safe_chunk_size = std::cmp::min(calculated, 200_usize);
 
-    // Process precursor IDs in batches of safe_chunk_size
+        // Process precursor IDs in batches of safe_chunk_size
         for precursor_ids_chunk in precursor_ids.chunks(safe_chunk_size) {
             // Build the query
             let mut sql_query = r#"
@@ -1929,67 +2027,81 @@ impl OswAccess {
                     LEFT_WIDTH,
                     RIGHT_WIDTH,
                     FEATURE_MS2.AREA_INTENSITY AS INTENSITY
-            "#.to_string();
-        
+            "#
+            .to_string();
+
             if score_ms2_exists {
                 sql_query.push_str(", SCORE_MS2.RANK, SCORE_MS2.QVALUE");
             }
-        
-            sql_query.push_str(r#"
+
+            sql_query.push_str(
+                r#"
                 FROM FEATURE
                 INNER JOIN RUN ON CAST(RUN.ID AS TEXT) = CAST(FEATURE.RUN_ID AS TEXT)
                 INNER JOIN PRECURSOR ON PRECURSOR.ID = FEATURE.PRECURSOR_ID
                 LEFT JOIN FEATURE_MS2 ON FEATURE_MS2.FEATURE_ID = FEATURE.ID
-            "#);
-        
+            "#,
+            );
+
             if score_ms2_exists {
                 // Use LEFT JOIN for SCORE_MS2 so that FEATURE rows without an MS2 score
                 // are not excluded when the SCORE_MS2 table exists. We read rank/qvalue
                 // as optional values further down.
                 sql_query.push_str(" LEFT JOIN SCORE_MS2 ON SCORE_MS2.FEATURE_ID = FEATURE.ID");
             }
-        
+
             // Build a literal comma-separated list of precursor IDs (integers) for the IN-list.
             // Using a literal list avoids surprising parameter-binding behavior for large
             // IN-lists and keeps the query simple: these values come from internal IDs
             // (trusted integers) so it's safe to inline them.
-            let prec_list = precursor_ids_chunk.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+            let prec_list = precursor_ids_chunk
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
             sql_query.push_str(&format!(" WHERE FEATURE.PRECURSOR_ID IN ({})", prec_list));
-        
-                // Track whether we added run placeholders so we know to bind params later
-                let mut run_placeholders_added = false;
 
-                if !basenames_vec.is_empty() {
-                    // Only include basenames that actually resolved to RUN entries. Prefer
-                    // exact RUN.ID matching (parameterized) instead of substring matching
-                    // on filenames; basenames may not reliably appear as substrings of
-                    // RUN.FILENAME and substring matching produced false negatives in
-                    // practice. run_ids preserves runtime types (Integer/Text/Blob) so
-                    // we bind them as parameters here.
-                    let resolved_run_values: Vec<rusqlite::types::Value> = run_ids.clone();
+            // Track whether we added run placeholders so we know to bind params later
+            let mut run_placeholders_added = false;
 
-                    if !resolved_run_values.is_empty() {
-                        // Build placeholders for the RUN.ID IN (...) clause and we will
-                        // bind the run_ids values as parameters when executing the query.
-                        let run_placeholders = resolved_run_values.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-                        // Some OSW files store RUN.ID as BLOB/TEXT containing ASCII
-                        // digits. Compare the textual representation of RUN.ID to the
-                        // bound parameters (which we will also provide as TEXT) so
-                        // comparisons succeed regardless of whether RUN.ID is stored
-                        // as BLOB or TEXT.
-                        sql_query.push_str(&format!(" AND CAST(RUN.ID AS TEXT) IN ({})", run_placeholders));
-                        run_placeholders_added = true;
+            if !basenames_vec.is_empty() {
+                // Only include basenames that actually resolved to RUN entries. Prefer
+                // exact RUN.ID matching (parameterized) instead of substring matching
+                // on filenames; basenames may not reliably appear as substrings of
+                // RUN.FILENAME and substring matching produced false negatives in
+                // practice. run_ids preserves runtime types (Integer/Text/Blob) so
+                // we bind them as parameters here.
+                let resolved_run_values: Vec<rusqlite::types::Value> = run_ids.clone();
 
-                        // We'll bind these run_id values (as rusqlite::types::Value) when
-                        // executing the statement below. To keep params ordering clear,
-                        // we will attach them to params_refs at execution time.
-                    } else {
-                        log::debug!("No requested basenames resolved to RUN entries; skipping RUN.ID filter for this chunk");
-                    }
+                if !resolved_run_values.is_empty() {
+                    // Build placeholders for the RUN.ID IN (...) clause and we will
+                    // bind the run_ids values as parameters when executing the query.
+                    let run_placeholders = resolved_run_values
+                        .iter()
+                        .map(|_| "?")
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    // Some OSW files store RUN.ID as BLOB/TEXT containing ASCII
+                    // digits. Compare the textual representation of RUN.ID to the
+                    // bound parameters (which we will also provide as TEXT) so
+                    // comparisons succeed regardless of whether RUN.ID is stored
+                    // as BLOB or TEXT.
+                    sql_query.push_str(&format!(
+                        " AND CAST(RUN.ID AS TEXT) IN ({})",
+                        run_placeholders
+                    ));
+                    run_placeholders_added = true;
+
+                    // We'll bind these run_id values (as rusqlite::types::Value) when
+                    // executing the statement below. To keep params ordering clear,
+                    // we will attach them to params_refs at execution time.
+                } else {
+                    log::debug!("No requested basenames resolved to RUN entries; skipping RUN.ID filter for this chunk");
                 }
-        
+            }
+
             sql_query.push_str(" ORDER BY FEATURE.PRECURSOR_ID, FILENAME, EXP_RT");
-        
+
             // Prepare and execute
             let mut stmt = conn.prepare(&sql_query)?;
 
@@ -1999,19 +2111,38 @@ impl OswAccess {
             // Process results - collect into a Vec of tuples so we can iterate and
             // update the feature_data_map. This avoids mismatched closure types
             // when using different parameter slices.
-            let feature_rows: Vec<(i32, String, i64, i64, f64, f64, f64, Option<f64>, Option<i32>, Option<f64>)> = if run_placeholders_added && !run_ids.is_empty() {
-                    // Convert run_ids to textual values so they match RUN.ID TEXT/ BLOB
-                    // representations in the DB (some RUN.ID fields are stored as BLOB
-                    // containing ASCII digits). We bind them as TEXT parameters.
-                    let params_values: Vec<rusqlite::types::Value> = run_ids.iter().map(|v| {
-                        match v {
-                            rusqlite::types::Value::Integer(i) => rusqlite::types::Value::Text(i.to_string()),
-                            rusqlite::types::Value::Text(s) => rusqlite::types::Value::Text(s.clone()),
-                            rusqlite::types::Value::Blob(b) => rusqlite::types::Value::Text(String::from_utf8_lossy(&b).to_string()),
-                            other => other.clone(),
+            let feature_rows: Vec<(
+                i32,
+                String,
+                i64,
+                i64,
+                f64,
+                f64,
+                f64,
+                Option<f64>,
+                Option<i32>,
+                Option<f64>,
+            )> = if run_placeholders_added && !run_ids.is_empty() {
+                // Convert run_ids to textual values so they match RUN.ID TEXT/ BLOB
+                // representations in the DB (some RUN.ID fields are stored as BLOB
+                // containing ASCII digits). We bind them as TEXT parameters.
+                let params_values: Vec<rusqlite::types::Value> = run_ids
+                    .iter()
+                    .map(|v| match v {
+                        rusqlite::types::Value::Integer(i) => {
+                            rusqlite::types::Value::Text(i.to_string())
                         }
-                    }).collect();
-                    let params_refs: Vec<&dyn rusqlite::ToSql> = params_values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+                        rusqlite::types::Value::Text(s) => rusqlite::types::Value::Text(s.clone()),
+                        rusqlite::types::Value::Blob(b) => {
+                            rusqlite::types::Value::Text(String::from_utf8_lossy(&b).to_string())
+                        }
+                        other => other.clone(),
+                    })
+                    .collect();
+                let params_refs: Vec<&dyn rusqlite::ToSql> = params_values
+                    .iter()
+                    .map(|v| v as &dyn rusqlite::ToSql)
+                    .collect();
                 stmt.query_map(params_refs.as_slice(), |row| {
                     let filename_value = row.get::<_, rusqlite::types::Value>(0)?;
                     let filename = value_to_string(filename_value);
@@ -2036,8 +2167,20 @@ impl OswAccess {
                         None
                     };
 
-                    Ok((precursor_id, filename, run_id, feature_id, exp_rt, left_width, right_width, intensity_option, rank_option, qvalue_option))
-                })?.collect::<Result<Vec<_>, _>>()?
+                    Ok((
+                        precursor_id,
+                        filename,
+                        run_id,
+                        feature_id,
+                        exp_rt,
+                        left_width,
+                        right_width,
+                        intensity_option,
+                        rank_option,
+                        qvalue_option,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?
             } else {
                 stmt.query_map([], |row| {
                     let filename_value = row.get::<_, rusqlite::types::Value>(0)?;
@@ -2063,12 +2206,25 @@ impl OswAccess {
                         None
                     };
 
-                    Ok((precursor_id, filename, run_id, feature_id, exp_rt, left_width, right_width, intensity_option, rank_option, qvalue_option))
-                })?.collect::<Result<Vec<_>, _>>()?
+                    Ok((
+                        precursor_id,
+                        filename,
+                        run_id,
+                        feature_id,
+                        exp_rt,
+                        left_width,
+                        right_width,
+                        intensity_option,
+                        rank_option,
+                        qvalue_option,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?
             };
-        
+
             let mut rows_processed: usize = 0;
-            let mut precursors_seen: std::collections::HashSet<i32> = std::collections::HashSet::new();
+            let mut precursors_seen: std::collections::HashSet<i32> =
+                std::collections::HashSet::new();
             for row in feature_rows {
                 let (
                     precursor_id,
@@ -2082,14 +2238,13 @@ impl OswAccess {
                     rank_option,
                     qvalue_option,
                 ) = row;
-                
+
                 // Get or create the precursor's feature data map
-                let precursor_data = feature_data_map.entry(precursor_id)
-                    .or_default();
-                
+                let precursor_data = feature_data_map.entry(precursor_id).or_default();
+
                 // Get or create the FeatureData for this filename
-                let feature_data = precursor_data.entry(filename.clone())
-                    .or_insert_with(|| FeatureData::new(
+                let feature_data = precursor_data.entry(filename.clone()).or_insert_with(|| {
+                    FeatureData::new(
                         filename,
                         run_id,
                         precursor_id,
@@ -2101,31 +2256,34 @@ impl OswAccess {
                         Some(ValueEntryType::Multiple(vec![])),
                         Some(ValueEntryType::Multiple(vec![])),
                         Some(ValueEntryType::Multiple(vec![])),
-                    ));
-        
+                    )
+                });
+
                 // Push values into their respective vectors
                 if let Some(ValueEntryType::Multiple(ref mut ids)) = feature_data.feature_id {
                     ids.push(feature_id);
                 }
-        
+
                 if let ValueEntryType::Multiple(ref mut exps) = feature_data.exp_rt {
                     exps.push(exp_rt);
                 }
-        
+
                 if let Some(ValueEntryType::Multiple(ref mut widths)) = feature_data.left_width {
                     widths.push(left_width);
                 }
-        
+
                 if let Some(ValueEntryType::Multiple(ref mut widths)) = feature_data.right_width {
                     widths.push(right_width);
                 }
-        
+
                 if let Some(intensity_val) = intensity_option {
-                    if let Some(ValueEntryType::Multiple(ref mut intensities)) = feature_data.intensity {
+                    if let Some(ValueEntryType::Multiple(ref mut intensities)) =
+                        feature_data.intensity
+                    {
                         intensities.push(intensity_val);
                     }
                 }
-        
+
                 if let Some(ValueEntryType::Multiple(ref mut ranks)) = feature_data.rank {
                     if let Some(rank) = rank_option {
                         ranks.push(rank);
@@ -2142,12 +2300,22 @@ impl OswAccess {
             }
 
             // Diagnostic: report how many rows were returned and which precursors were found
-            log::debug!("Feature fetch returned {} rows for precursor chunk (precursors seen: {})", rows_processed, precursors_seen.len());
+            log::debug!(
+                "Feature fetch returned {} rows for precursor chunk (precursors seen: {})",
+                rows_processed,
+                precursors_seen.len()
+            );
             // Log any precursors in the requested chunk that were not seen in the results
             let requested_precursors: Vec<i32> = precursor_ids_chunk.iter().cloned().collect();
-            let missing_precursors: Vec<i32> = requested_precursors.into_iter().filter(|p| !precursors_seen.contains(p)).collect();
+            let missing_precursors: Vec<i32> = requested_precursors
+                .into_iter()
+                .filter(|p| !precursors_seen.contains(p))
+                .collect();
             if !missing_precursors.is_empty() {
-                log::debug!("Requested precursor IDs missing from query results: {:?}", missing_precursors);
+                log::debug!(
+                    "Requested precursor IDs missing from query results: {:?}",
+                    missing_precursors
+                );
             }
 
             // If no rows were returned for this chunk, retry a simplified query without the RUN.ID filter
@@ -2155,10 +2323,16 @@ impl OswAccess {
             // returns zero, fall back to per-precursor small-batch fetches and populate the map so
             // the rest of the pipeline can proceed (this is slower but safe).
             if rows_processed == 0 {
-                log::debug!("No rows returned for chunk - retrying without RUN.ID filter to diagnose cause");
+                log::debug!(
+                    "No rows returned for chunk - retrying without RUN.ID filter to diagnose cause"
+                );
 
                 // Build a simple query that omits the RUN.ID IN (...) clause and returns a small sample
-                let prec_list = precursor_ids_chunk.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+                let prec_list = precursor_ids_chunk
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
                 let sql_no_run = format!(
                     "SELECT FEATURE.PRECURSOR_ID, FILENAME, EXP_RT FROM FEATURE INNER JOIN RUN ON RUN.ID = FEATURE.RUN_ID WHERE FEATURE.PRECURSOR_ID IN ({}) ORDER BY FEATURE.PRECURSOR_ID LIMIT 10",
                     prec_list
@@ -2174,7 +2348,8 @@ impl OswAccess {
                             Ok((row.get::<_, i32>(0)?, filename, row.get::<_, f64>(2)?))
                         }) {
                             Ok(mapped) => {
-                                let rows_sample: Vec<_> = mapped.collect::<Result<Vec<_>, _>>().unwrap_or_default();
+                                let rows_sample: Vec<_> =
+                                    mapped.collect::<Result<Vec<_>, _>>().unwrap_or_default();
                                 log::debug!("Retry without RUN filter returned {} rows (sample up to 10): {:?}", rows_sample.len(), rows_sample);
                                 // If still zero, probe a few individual precursor IDs to see whether
                                 // single-parameter queries return rows. This will differentiate
@@ -2182,22 +2357,39 @@ impl OswAccess {
                                 if rows_sample.is_empty() {
                                     let probe_count = precursor_ids_chunk.len().min(8);
                                     for &pid in precursor_ids_chunk.iter().take(probe_count) {
-                                        let probe_sql = "SELECT COUNT(*) FROM FEATURE WHERE PRECURSOR_ID = ?1";
-                                        match conn.query_row(probe_sql, rusqlite::params![pid], |r| r.get::<_, i64>(0)) {
-                                            Ok(cnt) => log::debug!("Probe PRECURSOR_ID={} -> FEATURE rows: {}", pid, cnt),
-                                            Err(e) => log::debug!("Probe PRECURSOR_ID={} -> query failed: {}", pid, e.to_string()),
+                                        let probe_sql =
+                                            "SELECT COUNT(*) FROM FEATURE WHERE PRECURSOR_ID = ?1";
+                                        match conn.query_row(
+                                            probe_sql,
+                                            rusqlite::params![pid],
+                                            |r| r.get::<_, i64>(0),
+                                        ) {
+                                            Ok(cnt) => log::debug!(
+                                                "Probe PRECURSOR_ID={} -> FEATURE rows: {}",
+                                                pid,
+                                                cnt
+                                            ),
+                                            Err(e) => log::debug!(
+                                                "Probe PRECURSOR_ID={} -> query failed: {}",
+                                                pid,
+                                                e.to_string()
+                                            ),
                                         }
                                     }
 
                                     // As a last-resort recovery: fetch each precursor individually in small batches
                                     // and insert their rows into feature_data_map so downstream code can proceed.
-                                    log::debug!("Falling back to per-precursor fetch for {} precursors", precursor_ids_chunk.len());
+                                    log::debug!(
+                                        "Falling back to per-precursor fetch for {} precursors",
+                                        precursor_ids_chunk.len()
+                                    );
                                     for &pid in precursor_ids_chunk.iter() {
                                         let single_sql = "SELECT FILENAME, RUN.ID AS RUN_ID, FEATURE.PRECURSOR_ID, FEATURE.ID AS FEATURE_ID, EXP_RT, LEFT_WIDTH, RIGHT_WIDTH, FEATURE_MS2.AREA_INTENSITY AS INTENSITY FROM FEATURE INNER JOIN RUN ON RUN.ID = FEATURE.RUN_ID LEFT JOIN FEATURE_MS2 ON FEATURE_MS2.FEATURE_ID = FEATURE.ID WHERE FEATURE.PRECURSOR_ID = ?1 ORDER BY EXP_RT";
                                         match conn.prepare(single_sql) {
                                             Ok(mut s) => {
                                                 match s.query_map(rusqlite::params![pid], |row| {
-                                                    let filename_value = row.get::<_, rusqlite::types::Value>(0)?;
+                                                    let filename_value =
+                                                        row.get::<_, rusqlite::types::Value>(0)?;
                                                     let filename = value_to_string(filename_value);
                                                     Ok((
                                                         filename,
@@ -2251,33 +2443,46 @@ impl OswAccess {
                                                             }
                                                         }
                                                     }
-                                                    Err(e) => log::trace!("Per-precursor query_map failed for {}: {}", pid, e.to_string()),
+                                                    Err(e) => log::trace!(
+                                                        "Per-precursor query_map failed for {}: {}",
+                                                        pid,
+                                                        e.to_string()
+                                                    ),
                                                 }
                                             }
-                                            Err(e) => log::trace!("Per-precursor prepare failed for {}: {}", pid, e.to_string()),
+                                            Err(e) => log::trace!(
+                                                "Per-precursor prepare failed for {}: {}",
+                                                pid,
+                                                e.to_string()
+                                            ),
                                         }
                                     }
                                 }
                             }
                             Err(e) => {
-                                log::trace!("Diagnostic query (no RUN filter) failed: {}", e.to_string());
+                                log::trace!(
+                                    "Diagnostic query (no RUN filter) failed: {}",
+                                    e.to_string()
+                                );
                             }
                         }
                     }
                     Err(e) => {
-                        log::trace!("Failed to prepare diagnostic no-run query: {}", e.to_string());
+                        log::trace!(
+                            "Failed to prepare diagnostic no-run query: {}",
+                            e.to_string()
+                        );
                     }
                 }
             }
         }
-        
+
         // Convert to the final HashMap<i32, Vec<FeatureData>> structure
-        let result = feature_data_map.into_iter()
-            .map(|(precursor_id, data_map)| {
-                (precursor_id, data_map.into_values().collect())
-            })
+        let result = feature_data_map
+            .into_iter()
+            .map(|(precursor_id, data_map)| (precursor_id, data_map.into_values().collect()))
             .collect();
-        
+
         Ok(result)
     }
 
@@ -2299,13 +2504,10 @@ impl OswAccess {
         // If the table exists, drop it and log a warning
         if table_exists {
             log::warn!("Table FEATURE_ALIGNMENT seems to already exist. Dropping it to create a new table for incoming data.");
-            conn.execute(
-                "DROP TABLE FEATURE_ALIGNMENT;",
-                [],
-            )
-            .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
+            conn.execute("DROP TABLE FEATURE_ALIGNMENT;", [])
+                .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
         }
-        
+
         conn.execute(
             r#"
                 CREATE TABLE IF NOT EXISTS FEATURE_ALIGNMENT (
@@ -2348,12 +2550,12 @@ impl OswAccess {
                 .pool
                 .get()
                 .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
-    
+
             // Begin a transaction
             let tx = conn
                 .transaction()
                 .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
-    
+
             {
                 let mut stmt = tx
                     .prepare(
@@ -2366,7 +2568,7 @@ impl OswAccess {
                         "#,
                     )
                     .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
-    
+
                 for peak_mapping in scores {
                     stmt.execute(params![
                         peak_mapping.reference_filename,
@@ -2381,14 +2583,13 @@ impl OswAccess {
                     .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
                 }
             } // `stmt` is dropped here
-    
+
             tx.commit()
                 .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
         } // `tx` and `conn` are dropped here, returning the connection to the pool
-    
+
         Ok(())
     }
-    
 
     /// Create the FEATURE_MS2_ALIGNMENT table if it doesn't exist
     pub fn create_feature_ms2_alignment_table(&self) -> Result<(), OpenSwathSqliteError> {
@@ -2408,11 +2609,8 @@ impl OswAccess {
         // If the table exists, drop it and log a warning
         if table_exists {
             log::warn!("Table FEATURE_MS2_ALIGNMENT seems to already exist. Dropping it to create a new table for incoming data.");
-            conn.execute(
-                "DROP TABLE FEATURE_MS2_ALIGNMENT;",
-                [],
-            )
-            .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
+            conn.execute("DROP TABLE FEATURE_MS2_ALIGNMENT;", [])
+                .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
         }
 
         conn.execute(
@@ -2462,6 +2660,87 @@ impl OswAccess {
         Ok(())
     }
 
+    pub fn create_feature_ms2_alignment_candidate_table(&self) -> Result<(), OpenSwathSqliteError> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
+
+        let table_exists: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'FEATURE_MS2_ALIGNMENT_CANDIDATE');",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
+
+        if table_exists {
+            log::warn!("Table FEATURE_MS2_ALIGNMENT_CANDIDATE seems to already exist. Dropping it to create a new table for incoming data.");
+            conn.execute("DROP TABLE FEATURE_MS2_ALIGNMENT_CANDIDATE;", [])
+                .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
+        }
+
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS FEATURE_MS2_ALIGNMENT_CANDIDATE (
+                ALIGNMENT_ID INTEGER,
+                PRECURSOR_ID INTEGER,
+                RUN_ID INTEGER,
+                REFERENCE_FEATURE_ID INTEGER,
+                ALIGNED_FEATURE_ID INTEGER,
+                REFERENCE_RT REAL,
+                MAPPED_TARGET_RT REAL,
+                ALIGNED_RT REAL,
+                REFERENCE_LEFT_WIDTH REAL,
+                REFERENCE_RIGHT_WIDTH REAL,
+                EXPECTED_ALIGNED_LEFT_WIDTH REAL,
+                EXPECTED_ALIGNED_RIGHT_WIDTH REAL,
+                ALIGNED_LEFT_WIDTH REAL,
+                ALIGNED_RIGHT_WIDTH REAL,
+                REFERENCE_FILENAME TEXT,
+                ALIGNED_FILENAME TEXT,
+                CANDIDATE_RANK INTEGER,
+                CANDIDATE_TOTAL_COUNT INTEGER,
+                CANDIDATE_WITHIN_TOLERANCE_COUNT INTEGER,
+                SELECTED INTEGER,
+                WITHIN_TOLERANCE INTEGER,
+                CANDIDATE_SCORE REAL,
+                MAPPING_CONFIDENCE REAL,
+                SCORE_MARGIN_TO_NEXT REAL,
+                NORMALIZED_RT_ERROR REAL,
+                ABS_RT_DIFF_TO_TARGET REAL,
+                ABS_RT_DIFF_TO_REFERENCE REAL,
+                ROUNDTRIP_ERROR REAL,
+                RT_SCORE REAL,
+                WIDTH_OVERLAP_SCORE REAL,
+                WIDTH_SIMILARITY_SCORE REAL,
+                INTENSITY_SIMILARITY_SCORE REAL,
+                RANK_SCORE REAL,
+                QVALUE_SCORE REAL,
+                FEATURE_RANK INTEGER,
+                FEATURE_QVALUE REAL,
+                FEATURE_INTENSITY REAL,
+                FEATURE_NORMALIZED_SUMMED_INTENSITY REAL
+            );
+            "#,
+            [],
+        )
+        .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
+
+        conn.execute(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_ms2_alignment_candidate_precursor_id ON FEATURE_MS2_ALIGNMENT_CANDIDATE (PRECURSOR_ID);
+            CREATE INDEX IF NOT EXISTS idx_ms2_alignment_candidate_run_id ON FEATURE_MS2_ALIGNMENT_CANDIDATE (RUN_ID);
+            CREATE INDEX IF NOT EXISTS idx_ms2_alignment_candidate_reference_feature_id ON FEATURE_MS2_ALIGNMENT_CANDIDATE (REFERENCE_FEATURE_ID);
+            CREATE INDEX IF NOT EXISTS idx_ms2_alignment_candidate_aligned_feature_id ON FEATURE_MS2_ALIGNMENT_CANDIDATE (ALIGNED_FEATURE_ID);
+            CREATE INDEX IF NOT EXISTS idx_ms2_alignment_candidate_selected ON FEATURE_MS2_ALIGNMENT_CANDIDATE (SELECTED);
+            "#,
+            [],
+        )
+        .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
+
+        Ok(())
+    }
+
     /// Insert batch of feature MS2 alignment data into the FEATURE_MS2_ALIGNMENT table
     pub fn insert_feature_ms2_alignment_batch(
         &self,
@@ -2473,12 +2752,12 @@ impl OswAccess {
                 .pool
                 .get()
                 .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
-    
+
             // Begin a transaction
             let tx = conn
                 .transaction()
                 .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
-    
+
             {
                 let mut stmt = tx
                     .prepare(
@@ -2494,7 +2773,7 @@ impl OswAccess {
                         "#,
                     )
                     .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
-    
+
                 for peak_mapping in peak_mappings {
                     stmt.execute(params![
                         peak_mapping.alignment_id,
@@ -2523,14 +2802,13 @@ impl OswAccess {
                     .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
                 }
             } // `stmt` goes out of scope here and is dropped
-    
+
             tx.commit()
                 .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
         } // `tx` and `conn` go out of scope here, ensuring they are returned to the pool
-    
+
         Ok(())
     }
-    
 
     /// Create the FEATURE_TRANSITION_ALIGNMENT table if it doesn't exist
     pub fn create_feature_transition_alignment_table(&self) -> Result<(), OpenSwathSqliteError> {
@@ -2550,11 +2828,8 @@ impl OswAccess {
         // If the table exists, drop it and log a warning
         if table_exists {
             log::warn!("Table FEATURE_TRANSITION_ALIGNMENT seems to already exist. Dropping it to create a new table for incoming data.");
-            conn.execute(
-                "DROP TABLE FEATURE_TRANSITION_ALIGNMENT;",
-                [],
-            )
-            .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
+            conn.execute("DROP TABLE FEATURE_TRANSITION_ALIGNMENT;", [])
+                .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
         }
 
         conn.execute(
@@ -2590,6 +2865,101 @@ impl OswAccess {
         Ok(())
     }
 
+    pub fn insert_feature_ms2_alignment_candidate_batch(
+        &self,
+        candidate_mappings: &[PeakMappingCandidate],
+    ) -> Result<(), OpenSwathSqliteError> {
+        if candidate_mappings.is_empty() {
+            return Ok(());
+        }
+
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
+
+        let tx = conn
+            .transaction()
+            .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
+
+        {
+            let mut stmt = tx
+                .prepare(
+                    r#"
+                    INSERT INTO FEATURE_MS2_ALIGNMENT_CANDIDATE (
+                        alignment_id, precursor_id, run_id, reference_feature_id, aligned_feature_id,
+                        reference_rt, mapped_target_rt, aligned_rt,
+                        reference_left_width, reference_right_width,
+                        expected_aligned_left_width, expected_aligned_right_width,
+                        aligned_left_width, aligned_right_width,
+                        reference_filename, aligned_filename,
+                        candidate_rank, candidate_total_count, candidate_within_tolerance_count,
+                        selected, within_tolerance,
+                        candidate_score, mapping_confidence, score_margin_to_next,
+                        normalized_rt_error, abs_rt_diff_to_target, abs_rt_diff_to_reference,
+                        roundtrip_error, rt_score, width_overlap_score, width_similarity_score,
+                        intensity_similarity_score, rank_score, qvalue_score,
+                        feature_rank, feature_qvalue, feature_intensity, feature_normalized_summed_intensity
+                    ) VALUES (
+                        ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                        ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
+                        ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38
+                    )
+                    "#,
+                )
+                .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
+
+            for candidate in candidate_mappings {
+                stmt.execute(params![
+                    candidate.alignment_id,
+                    candidate.precursor_id,
+                    candidate.run_id,
+                    candidate.reference_feature_id,
+                    candidate.aligned_feature_id,
+                    candidate.reference_rt,
+                    candidate.mapped_target_rt,
+                    candidate.aligned_rt,
+                    candidate.reference_left_width,
+                    candidate.reference_right_width,
+                    candidate.expected_aligned_left_width,
+                    candidate.expected_aligned_right_width,
+                    candidate.aligned_left_width,
+                    candidate.aligned_right_width,
+                    candidate.reference_filename,
+                    candidate.aligned_filename,
+                    candidate.candidate_rank,
+                    candidate.candidate_total_count,
+                    candidate.candidate_within_tolerance_count,
+                    candidate.selected as i32,
+                    candidate.within_tolerance as i32,
+                    candidate.candidate_score,
+                    candidate.mapping_confidence,
+                    candidate.score_margin_to_next,
+                    candidate.normalized_rt_error,
+                    candidate.abs_rt_diff_to_target,
+                    candidate.abs_rt_diff_to_reference,
+                    candidate.roundtrip_error,
+                    candidate.rt_score,
+                    candidate.width_overlap_score,
+                    candidate.width_similarity_score,
+                    candidate.intensity_similarity_score,
+                    candidate.rank_score,
+                    candidate.qvalue_score,
+                    candidate.feature_rank,
+                    candidate.feature_qvalue,
+                    candidate.feature_intensity,
+                    candidate.feature_normalized_summed_intensity,
+                ])
+                .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
+            }
+        }
+
+        tx.commit()
+            .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
+
+        Ok(())
+    }
+
     /// Insert batch of feature transition alignment data into the FEATURE_TRANSITION_ALIGNMENT table
     pub fn insert_feature_transition_alignment_batch(
         &self,
@@ -2601,12 +2971,12 @@ impl OswAccess {
                 .pool
                 .get()
                 .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
-    
+
             // Begin a transaction
             let tx = conn
                 .transaction()
                 .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
-    
+
             {
                 let mut stmt = tx
                     .prepare(
@@ -2620,7 +2990,7 @@ impl OswAccess {
                         "#,
                     )
                     .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
-    
+
                 for peak_mapping in peak_mappings {
                     stmt.execute(params![
                         peak_mapping.feature_id,
@@ -2638,12 +3008,11 @@ impl OswAccess {
                     .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
                 }
             } // `stmt` is dropped here
-    
+
             tx.commit()
                 .map_err(|e| OpenSwathSqliteError::DatabaseError(e.to_string()))?;
         } // `tx` and `conn` are dropped here, returning the connection to the pool
-    
+
         Ok(())
     }
-    
 }

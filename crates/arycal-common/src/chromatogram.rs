@@ -1,12 +1,10 @@
-use anyhow::{anyhow, Result as AnyHowResult};
-use std::collections::HashMap;
-use std::collections::BTreeSet;
-use ordered_float::OrderedFloat;
 use crate::savgol;
-use serde::{Serialize, Deserialize};
+use anyhow::{anyhow, Result as AnyHowResult};
 use deepsize::DeepSizeOf;
-
-
+use ordered_float::OrderedFloat;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::collections::HashMap;
 
 /// Represents a single trace chromatogram with its associated data.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, DeepSizeOf)]
@@ -97,11 +95,11 @@ impl Chromatogram {
     }
 
     /// Helper method to calculate smoothed intensities using Savitzky-Golay filter.
-    /// 
+    ///
     /// # Parameters
     /// - `window_length`: The length of the filter window (must be a positive odd integer).
     /// - `poly_order`: The order of the polynomial used to fit the samples (must be less than `window_length`).
-    /// 
+    ///
     /// # Returns
     /// A vector of smoothed intensities.
     fn calculate_smoothed_intensities(
@@ -162,17 +160,16 @@ impl Chromatogram {
             metadata: new_metadata,
         })
     }
-
 }
 
 /// Crate a common retention time space for a vector of chromatograms.
-/// 
+///
 /// This function creates a common retention time space by collecting all unique retention times from the input chromatograms.
 /// It then creates new chromatograms with the common retention time space by interpolating intensities.
-/// 
+///
 /// # Parameters
 /// - `chromatograms`: A vector of `Chromatogram` instances.
-/// 
+///
 /// # Returns
 /// A vector of `Chromatogram` instances with a common retention time space.
 pub fn create_common_rt_space(chromatograms: Vec<Chromatogram>) -> Vec<Chromatogram> {
@@ -234,12 +231,12 @@ pub fn apply_common_rt_space_single(chrom: Chromatogram, common_rts: &Vec<f64>) 
 }
 
 /// Pad chromatograms
-/// 
+///
 /// pad vector of chromatogram intensities with zeros and padding retention times with difference between last two retention times on both sides
-/// 
+///
 /// # Parameters
 /// - `chromatograms`: A vector of `Chromatogram` instances.
-/// 
+///
 /// # Returns
 pub fn pad_chromatograms(chromatograms: Vec<Chromatogram>) -> Vec<Chromatogram> {
     let mut padded_chromatograms = Vec::new();
@@ -266,14 +263,13 @@ pub fn pad_chromatograms(chromatograms: Vec<Chromatogram>) -> Vec<Chromatogram> 
     padded_chromatograms
 }
 
-
 /// Struct for the aligned retention time pair.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, DeepSizeOf)]
 pub struct AlignedRTPointPair {
     /// The retention time point of the first chromatogram (reference).
     pub rt1: f32,
     /// The retention time point of the second chromatogram (query aligned).
-    pub rt2: f32
+    pub rt2: f32,
 }
 
 /// Represents the mapping of peaks across chromatograms.
@@ -290,4 +286,3 @@ pub struct AlignedChromatogram {
     /// basename of reference chromatogram
     pub reference_basename: String,
 }
-

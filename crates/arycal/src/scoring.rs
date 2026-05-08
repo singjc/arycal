@@ -416,8 +416,13 @@ pub fn compute_peak_mapping_scores(
                     ));
                 }
 
-                peak_mapping.rt_deviation =
-                    Some((peak_mapping.aligned_rt - peak_mapping.reference_rt).abs());
+                peak_mapping.rt_deviation = Some(
+                    (peak_mapping.aligned_rt
+                        - peak_mapping
+                            .mapped_target_rt
+                            .unwrap_or(peak_mapping.reference_rt))
+                    .abs(),
+                );
                 peak_mapping.intensity_ratio = Some(compute_peak_intensity_ratio(
                     &reference_intensities,
                     &aligned_intensities,
@@ -1048,6 +1053,16 @@ mod tests {
             mi_to_all: None,
             rt_deviation: None,
             intensity_ratio: None,
+            mapped_target_rt: None,
+            roundtrip_error: None,
+            candidate_total_count: None,
+            candidate_within_tolerance_count: None,
+            normalized_rt_error: None,
+            mapping_score: None,
+            mapping_confidence: None,
+            score_margin_to_second_best: None,
+            feature_rank: None,
+            feature_qvalue: None,
         }
     }
 

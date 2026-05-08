@@ -171,6 +171,8 @@ pub struct AlignmentConfig {
     /// The legacy "shuffle" alias is still accepted and maps to "shuffle_stratified".
     #[serde(rename = "decoy_peak_mapping_method")]
     pub decoy_peak_mapping_method: String,
+    /// Whether to generate and score decoy peak mappings. Default is false.
+    pub compute_decoys: Option<bool>,
     /// Size of the window to use for the decoy peak mapping. Only used when the method is "random_regions".
     pub decoy_window_size: Option<usize>,
     /// Optionally compute alignment scores for the full trace alignment and peak mapping. Default is true.
@@ -196,6 +198,7 @@ impl Default for AlignmentConfig {
             },
             rt_mapping_tolerance: Some(10.0),
             decoy_peak_mapping_method: "shuffle_stratified".to_string(),
+            compute_decoys: Some(false),
             decoy_window_size: Some(30),
             compute_scores: Some(true),
             scores_output_file: None,
@@ -218,6 +221,7 @@ impl std::fmt::Display for AlignmentConfig {
             sgolay_order: {}\n\
             rt_mapping_tolerance: {}\n\
             decoy_peak_mapping_method: {}\n\
+            compute_decoys: {:?}\n\
             decoy_window_size: {:?}\n\
             compute_scores: {:?}\n\
             scores_output_file: {:?}\n\
@@ -231,6 +235,7 @@ impl std::fmt::Display for AlignmentConfig {
             self.smoothing.sgolay_order,
             self.rt_mapping_tolerance.unwrap_or_default(),
             self.decoy_peak_mapping_method,
+            self.compute_decoys.unwrap_or_default(),
             self.decoy_window_size.unwrap_or_default(),
             self.compute_scores.unwrap_or_default(),
             self.scores_output_file

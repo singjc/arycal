@@ -20,7 +20,11 @@ use ndarray::{Array1, Array2};
 /// # Returns
 ///
 /// A vector of smoothed intensities, or an error message if parameters are invalid.
-pub fn savgol_filter(data: &[f64], window_length: usize, poly_order: usize) -> Result<Vec<f64>, String> {
+pub fn savgol_filter(
+    data: &[f64],
+    window_length: usize,
+    poly_order: usize,
+) -> Result<Vec<f64>, String> {
     // Validate parameters
     if window_length % 2 == 0 {
         return Err("Window length must be odd".to_string());
@@ -231,7 +235,13 @@ mod tests {
         // Linear polynomial should be preserved
         for (i, value) in smoothed.iter().enumerate() {
             let expected = (i + 1) as f64;
-            assert!((value - expected).abs() < 0.1, "At index {}: expected {}, got {}", i, expected, value);
+            assert!(
+                (value - expected).abs() < 0.1,
+                "At index {}: expected {}, got {}",
+                i,
+                expected,
+                value
+            );
         }
     }
 
@@ -244,7 +254,13 @@ mod tests {
         // Quadratic polynomial should be preserved
         for (i, value) in smoothed.iter().enumerate() {
             let expected = (i as f64).powi(2);
-            assert!((value - expected).abs() < 0.1, "At index {}: expected {}, got {}", i, expected, value);
+            assert!(
+                (value - expected).abs() < 0.1,
+                "At index {}: expected {}, got {}",
+                i,
+                expected,
+                value
+            );
         }
     }
 
@@ -252,7 +268,8 @@ mod tests {
     fn test_smoothing_noisy_data() {
         // Create noisy data around y = 2x
         let base: Vec<f64> = (0..10).map(|i| 2.0 * i as f64).collect();
-        let noisy: Vec<f64> = base.iter()
+        let noisy: Vec<f64> = base
+            .iter()
             .enumerate()
             .map(|(i, &y)| y + if i % 2 == 0 { 0.5 } else { -0.5 })
             .collect();
@@ -262,21 +279,25 @@ mod tests {
         let smoothed = result.unwrap();
 
         // Check that smoothing reduces variance
-        let original_variance = noisy.iter()
+        let original_variance = noisy
+            .iter()
             .enumerate()
             .map(|(i, &y)| {
                 let expected = 2.0 * i as f64;
                 (y - expected).powi(2)
             })
-            .sum::<f64>() / noisy.len() as f64;
+            .sum::<f64>()
+            / noisy.len() as f64;
 
-        let smoothed_variance = smoothed.iter()
+        let smoothed_variance = smoothed
+            .iter()
             .enumerate()
             .map(|(i, &y)| {
                 let expected = 2.0 * i as f64;
                 (y - expected).powi(2)
             })
-            .sum::<f64>() / smoothed.len() as f64;
+            .sum::<f64>()
+            / smoothed.len() as f64;
 
         assert!(smoothed_variance < original_variance);
     }

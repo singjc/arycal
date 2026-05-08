@@ -30,7 +30,8 @@ use arycal_cloudpath::{
 use arycal_common::{
     chromatogram::{create_common_rt_space, AlignedChromatogram},
     config::FeaturesFileType,
-    AlignedTics, AlignedTransitionScores, PeakMapping, PrecursorAlignmentResult, PrecursorXics,
+    AlignedTics, AlignedTransitionScores, PeakMapping, PeakMappingCandidate,
+    PrecursorAlignmentResult, PrecursorXics,
 };
 use arycal_core::{
     alignment::alignment::apply_post_alignment_to_trgrp,
@@ -40,7 +41,7 @@ use arycal_core::{
     },
 };
 use arycal_core::{
-    alignment::alignment::map_peaks_across_runs,
+    alignment::alignment::map_peaks_across_runs_with_confidence,
     alignment::dynamic_time_warping::{mst_align_tics, progressive_align_tics, star_align_tics},
     alignment::fast_fourier_lag::{
         mst_align_tics_fft, progressive_align_tics_fft, star_align_tics_fft,
@@ -128,6 +129,17 @@ impl FeatureAccessor {
         }
     }
 
+    fn create_feature_ms2_alignment_candidate_table(&self) -> anyhow::Result<()> {
+        match self {
+            FeatureAccessor::Osw(access) => access
+                .create_feature_ms2_alignment_candidate_table()
+                .map_err(|e| anyhow::anyhow!(e)),
+            FeatureAccessor::Oswpq(access) => access
+                .create_feature_ms2_alignment_candidate_table()
+                .map_err(|e| anyhow::anyhow!(e)),
+        }
+    }
+
     fn insert_feature_ms2_alignment_batch(
         &self,
         peak_mappings: &[PeakMapping],
@@ -152,6 +164,20 @@ impl FeatureAccessor {
                 .map_err(|e| anyhow::anyhow!(e)),
             FeatureAccessor::Oswpq(access) => access
                 .write_transition_alignment_batch(transition_scores)
+                .map_err(|e| anyhow::anyhow!(e)),
+        }
+    }
+
+    fn insert_feature_ms2_alignment_candidate_batch(
+        &self,
+        candidate_mappings: &[PeakMappingCandidate],
+    ) -> anyhow::Result<()> {
+        match self {
+            FeatureAccessor::Osw(access) => access
+                .insert_feature_ms2_alignment_candidate_batch(candidate_mappings)
+                .map_err(|e| anyhow::anyhow!(e)),
+            FeatureAccessor::Oswpq(access) => access
+                .write_ms2_alignment_candidate_batch(candidate_mappings)
                 .map_err(|e| anyhow::anyhow!(e)),
         }
     }
@@ -423,6 +449,7 @@ impl Runner {
 
         for accessor in feature_access {
             accessor.create_feature_ms2_alignment_table()?;
+            accessor.create_feature_ms2_alignment_candidate_table()?;
         }
 
         if self
@@ -484,6 +511,7 @@ impl Runner {
             // }
 
             self.write_ms2_alignment_results_to_db(&feature_access, &results)?;
+            self.write_ms2_alignment_candidate_results_to_db(&feature_access, &results)?;
 
             if self
                 .parameters
@@ -582,6 +610,7 @@ impl Runner {
         if rank == 0 {
             for osw_access in &feature_access {
                 osw_access.create_feature_ms2_alignment_table()?;
+                osw_access.create_feature_ms2_alignment_candidate_table()?;
             }
 
             if self
@@ -645,6 +674,7 @@ impl Runner {
             // Write results (each rank writes its own part)
             // You might want to coordinate this to avoid conflicts
             self.write_ms2_alignment_results_to_db(&feature_access, &results)?;
+            self.write_ms2_alignment_candidate_results_to_db(&feature_access, &results)?;
 
             if self
                 .parameters
@@ -837,58 +867,63 @@ impl Runner {
         )?;
 
         // First collect all the mapping results in parallel
-        let peak_mapping_results: Vec<(String, Vec<arycal_common::PeakMapping>)> = aligned_chromatograms
-        .par_iter()
-        .filter_map(|chrom| {
-            let current_run = chrom.chromatogram.metadata.get("basename").unwrap();
-            log::trace!(
-                "Mapping peaks from reference run: {} to current run: {}",
-                chrom.reference_basename,
-                current_run
-            );
-
-            // Filter prec_feat_data for current run
-            let current_run_feat_data: Vec<_> = prec_feat_data
-                .iter()
-                .filter(|f| &f.basename == current_run)
-                .cloned()
-                .collect();
-
-            // Get reference run feature data
-            let ref_run_feat_data: Vec<_> = prec_feat_data
-                .iter()
-                .filter(|f| f.basename == chrom.reference_basename)
-                .cloned()
-                .collect();
-
-            if current_run_feat_data.is_empty() || ref_run_feat_data.is_empty() {
+        let peak_mapping_results: Vec<(
+            String,
+            Vec<arycal_common::PeakMapping>,
+            Vec<PeakMappingCandidate>,
+        )> = aligned_chromatograms
+            .par_iter()
+            .filter_map(|chrom| {
+                let current_run = chrom.chromatogram.metadata.get("basename").unwrap();
                 log::trace!(
-                    "Current run feature data or reference run feature data is empty, skipping peak mapping for run: {}",
+                    "Mapping peaks from reference run: {} to current run: {}",
+                    chrom.reference_basename,
                     current_run
                 );
-                return None;
-            }
 
-            let mapped_peaks = map_peaks_across_runs(
-                chrom,
-                ref_run_feat_data,
-                current_run_feat_data,
-                self.parameters.alignment.rt_mapping_tolerance.unwrap_or_default(),
-                &self.parameters.alignment,
-            );
+                let current_run_feat_data: Vec<_> = prec_feat_data
+                    .iter()
+                    .filter(|f| &f.basename == current_run)
+                    .cloned()
+                    .collect();
 
-            Some((
-                chrom.chromatogram.metadata.get("basename").unwrap().to_string(),
-                mapped_peaks,
-            ))
-        })
-        .collect();
+                let ref_run_feat_data: Vec<_> = prec_feat_data
+                    .iter()
+                    .filter(|f| f.basename == chrom.reference_basename)
+                    .cloned()
+                    .collect();
 
-        // Then insert into HashMap serially
+                if current_run_feat_data.is_empty() || ref_run_feat_data.is_empty() {
+                    log::trace!(
+                        "Current run feature data or reference run feature data is empty, skipping peak mapping for run: {}",
+                        current_run
+                    );
+                    return None;
+                }
+
+                let (mapped_peaks, candidate_peak_mappings) = map_peaks_across_runs_with_confidence(
+                    chrom,
+                    ref_run_feat_data,
+                    current_run_feat_data,
+                    self.parameters.alignment.rt_mapping_tolerance.unwrap_or_default(),
+                    &self.parameters.alignment,
+                );
+
+                Some((
+                    chrom.chromatogram.metadata.get("basename").unwrap().to_string(),
+                    mapped_peaks,
+                    candidate_peak_mappings,
+                ))
+            })
+            .collect();
+
         let mut mapped_prec_peaks: HashMap<String, Vec<arycal_common::PeakMapping>> =
             HashMap::new();
-        for (key, value) in peak_mapping_results {
-            mapped_prec_peaks.insert(key, value);
+        let mut candidate_peak_mappings: HashMap<String, Vec<PeakMappingCandidate>> =
+            HashMap::new();
+        for (key, selected_mappings, candidates) in peak_mapping_results {
+            mapped_prec_peaks.insert(key.clone(), selected_mappings);
+            candidate_peak_mappings.insert(key, candidates);
         }
 
         log::debug!("Peak mapping took: {:?}", start_time.elapsed());
@@ -907,55 +942,60 @@ impl Runner {
             let scored_peak_mappings =
                 compute_peak_mapping_scores(&aligned_chromatograms, &mapped_prec_peaks);
 
-            // Create decoy aligned peaks based on the method specified in the parameters
-            let decoy_peak_mappings: HashMap<String, Vec<PeakMapping>> = match self
+            let all_peak_mappings: HashMap<String, Vec<PeakMapping>> = if self
                 .parameters
                 .alignment
-                .decoy_peak_mapping_method
-                .as_str()
+                .compute_decoys
+                .unwrap_or_default()
             {
-                "shuffle" | "shuffle_stratified" => {
-                    log::debug!("Creating decoy peaks by stratified shuffling of query peaks");
-                    create_decoy_peaks_by_shuffling(&mapped_prec_peaks)
-                }
-                "candidate_hard_negative" => {
-                    log::debug!(
-                        "Creating decoy peaks from same-run hard negative feature candidates"
-                    );
-                    create_decoy_peaks_by_candidate_hard_negative(
-                        &mapped_prec_peaks,
-                        &prec_feat_data,
-                        self.parameters
-                            .alignment
-                            .rt_mapping_tolerance
-                            .unwrap_or_default(),
-                    )
-                }
-                "random_regions" => {
-                    log::debug!("Creating decoy peaks by picking random regions in the query XIC");
-                    create_decoy_peaks_by_random_regions(
-                        &aligned_chromatograms,
-                        &mapped_prec_peaks,
-                        self.parameters
-                            .alignment
-                            .decoy_window_size
-                            .unwrap_or_default(),
-                    )
-                }
-                unknown_method => {
-                    log::warn!(
+                let decoy_peak_mappings: HashMap<String, Vec<PeakMapping>> = match self
+                    .parameters
+                    .alignment
+                    .decoy_peak_mapping_method
+                    .as_str()
+                {
+                    "shuffle" | "shuffle_stratified" => {
+                        log::debug!("Creating decoy peaks by stratified shuffling of query peaks");
+                        create_decoy_peaks_by_shuffling(&mapped_prec_peaks)
+                    }
+                    "candidate_hard_negative" => {
+                        log::debug!(
+                            "Creating decoy peaks from same-run hard negative feature candidates"
+                        );
+                        create_decoy_peaks_by_candidate_hard_negative(
+                            &mapped_prec_peaks,
+                            &prec_feat_data,
+                            self.parameters
+                                .alignment
+                                .rt_mapping_tolerance
+                                .unwrap_or_default(),
+                        )
+                    }
+                    "random_regions" => {
+                        log::debug!(
+                            "Creating decoy peaks by picking random regions in the query XIC"
+                        );
+                        create_decoy_peaks_by_random_regions(
+                            &aligned_chromatograms,
+                            &mapped_prec_peaks,
+                            self.parameters
+                                .alignment
+                                .decoy_window_size
+                                .unwrap_or_default(),
+                        )
+                    }
+                    unknown_method => {
+                        log::warn!(
                             "Unknown decoy peak mapping method '{}', falling back to shuffle_stratified",
                             unknown_method
                         );
-                    create_decoy_peaks_by_shuffling(&mapped_prec_peaks)
-                }
-            };
-            log::debug!("Computing peak mapping scores for decoy peaks");
-            let scored_decoy_peak_mappings =
-                compute_peak_mapping_scores(&aligned_chromatograms, &decoy_peak_mappings);
+                        create_decoy_peaks_by_shuffling(&mapped_prec_peaks)
+                    }
+                };
+                log::debug!("Computing peak mapping scores for decoy peaks");
+                let scored_decoy_peak_mappings =
+                    compute_peak_mapping_scores(&aligned_chromatograms, &decoy_peak_mappings);
 
-            // Combine true and decoy peaks for analysis into HashMap<String, Vec<PeakMapping>>
-            let all_peak_mappings: HashMap<String, Vec<PeakMapping>> = {
                 let mut all_peak_mappings = HashMap::new();
                 for (key, value) in scored_peak_mappings
                     .iter()
@@ -967,6 +1007,9 @@ impl Runner {
                         .extend(value.clone());
                 }
                 all_peak_mappings
+            } else {
+                log::debug!("Skipping decoy peak mapping generation and scoring");
+                scored_peak_mappings.clone()
             };
             log::debug!("Peak mapping scoring took: {:?}", start_time.elapsed());
             (scored_peak_mappings, all_peak_mappings)
@@ -1010,6 +1053,7 @@ impl Runner {
             PrecursorAlignmentResult {
                 alignment_scores,
                 detecting_peak_mappings: all_peak_mappings,
+                detecting_peak_mapping_candidates: candidate_peak_mappings,
                 identifying_peak_mapping_scores,
             },
         );
@@ -1351,7 +1395,11 @@ impl Runner {
         /* Aligned Peak Mapping                                       */
         /* ------------------------------------------------------------------ */
         // log::trace!("Mapping peaks for precursor: {:?} for {:?} aligned chromatograms", precursor.precursor_id, aligned.aligned_chromatograms.len());
-        let peak_mapping_results: Vec<_> = aligned.aligned_chromatograms
+        let peak_mapping_results: Vec<(
+            String,
+            Vec<PeakMapping>,
+            Vec<PeakMappingCandidate>,
+        )> = aligned.aligned_chromatograms
             .par_iter()
             .filter_map(|chrom| {
                 let current_run = chrom.chromatogram.metadata.get("basename").unwrap();
@@ -1391,7 +1439,7 @@ impl Runner {
                 }
 
                 let start_time = Instant::now();
-                let mapped_peaks = map_peaks_across_runs(
+                let (mapped_peaks, candidate_peak_mappings) = map_peaks_across_runs_with_confidence(
                     chrom,
                     ref_run_feat_data,
                     current_run_feat_data,
@@ -1403,13 +1451,16 @@ impl Runner {
                 Some((
                     chrom.chromatogram.metadata.get("basename").unwrap().to_string(),
                     mapped_peaks,
+                    candidate_peak_mappings,
                 ))
             })
             .collect();
 
         let mut mapped_prec_peaks = HashMap::new();
-        for (key, value) in peak_mapping_results {
-            mapped_prec_peaks.insert(key, value);
+        let mut candidate_peak_mappings = HashMap::new();
+        for (key, value, candidates) in peak_mapping_results {
+            mapped_prec_peaks.insert(key.clone(), value);
+            candidate_peak_mappings.insert(key, candidates);
         }
 
         /* ------------------------------------------------------------------ */
@@ -1436,55 +1487,62 @@ impl Runner {
             let scored_peak_mappings =
                 compute_peak_mapping_scores(&aligned.aligned_chromatograms, &mapped_prec_peaks);
 
-            // Create decoy aligned peaks based on the method specified in the parameters
-            let decoy_peak_mappings: HashMap<String, Vec<PeakMapping>> = match self
+            let all_peak_mappings: HashMap<String, Vec<PeakMapping>> = if self
                 .parameters
                 .alignment
-                .decoy_peak_mapping_method
-                .as_str()
+                .compute_decoys
+                .unwrap_or_default()
             {
-                "shuffle" | "shuffle_stratified" => {
-                    log::trace!("Creating decoy peaks by stratified shuffling of query peaks");
-                    create_decoy_peaks_by_shuffling(&mapped_prec_peaks)
-                }
-                "candidate_hard_negative" => {
-                    log::trace!(
-                        "Creating decoy peaks from same-run hard negative feature candidates"
-                    );
-                    create_decoy_peaks_by_candidate_hard_negative(
-                        &mapped_prec_peaks,
-                        prec_feat_data,
-                        self.parameters
-                            .alignment
-                            .rt_mapping_tolerance
-                            .unwrap_or_default(),
-                    )
-                }
-                "random_regions" => {
-                    log::trace!("Creating decoy peaks by picking random regions in the query XIC");
-                    create_decoy_peaks_by_random_regions(
-                        &aligned.aligned_chromatograms,
-                        &mapped_prec_peaks,
-                        self.parameters
-                            .alignment
-                            .decoy_window_size
-                            .unwrap_or_default(),
-                    )
-                }
-                unknown_method => {
-                    log::warn!(
+                let decoy_peak_mappings: HashMap<String, Vec<PeakMapping>> = match self
+                    .parameters
+                    .alignment
+                    .decoy_peak_mapping_method
+                    .as_str()
+                {
+                    "shuffle" | "shuffle_stratified" => {
+                        log::trace!("Creating decoy peaks by stratified shuffling of query peaks");
+                        create_decoy_peaks_by_shuffling(&mapped_prec_peaks)
+                    }
+                    "candidate_hard_negative" => {
+                        log::trace!(
+                            "Creating decoy peaks from same-run hard negative feature candidates"
+                        );
+                        create_decoy_peaks_by_candidate_hard_negative(
+                            &mapped_prec_peaks,
+                            prec_feat_data,
+                            self.parameters
+                                .alignment
+                                .rt_mapping_tolerance
+                                .unwrap_or_default(),
+                        )
+                    }
+                    "random_regions" => {
+                        log::trace!(
+                            "Creating decoy peaks by picking random regions in the query XIC"
+                        );
+                        create_decoy_peaks_by_random_regions(
+                            &aligned.aligned_chromatograms,
+                            &mapped_prec_peaks,
+                            self.parameters
+                                .alignment
+                                .decoy_window_size
+                                .unwrap_or_default(),
+                        )
+                    }
+                    unknown_method => {
+                        log::warn!(
                             "Unknown decoy peak mapping method '{}', falling back to shuffle_stratified",
                             unknown_method
                         );
-                    create_decoy_peaks_by_shuffling(&mapped_prec_peaks)
-                }
-            };
-            log::trace!("Computing peak mapping scores for decoy peaks");
-            let scored_decoy_peak_mappings =
-                compute_peak_mapping_scores(&aligned.aligned_chromatograms, &decoy_peak_mappings);
+                        create_decoy_peaks_by_shuffling(&mapped_prec_peaks)
+                    }
+                };
+                log::trace!("Computing peak mapping scores for decoy peaks");
+                let scored_decoy_peak_mappings = compute_peak_mapping_scores(
+                    &aligned.aligned_chromatograms,
+                    &decoy_peak_mappings,
+                );
 
-            // Combine true and decoy peaks for analysis into HashMap<String, Vec<PeakMapping>>
-            let all_peak_mappings: HashMap<String, Vec<PeakMapping>> = {
                 let mut all_peak_mappings = HashMap::new();
                 for (key, value) in scored_peak_mappings
                     .iter()
@@ -1496,6 +1554,9 @@ impl Runner {
                         .extend(value.clone());
                 }
                 all_peak_mappings
+            } else {
+                log::trace!("Skipping decoy peak mapping generation and scoring");
+                scored_peak_mappings.clone()
             };
             log::trace!("Peak mapping scoring took: {:?}", start_time.elapsed());
             (scored_peak_mappings, all_peak_mappings)
@@ -1534,6 +1595,7 @@ impl Runner {
         Ok(PrecursorAlignmentResult {
             alignment_scores: alignment_scores,
             detecting_peak_mappings: all_peak_mappings,
+            detecting_peak_mapping_candidates: candidate_peak_mappings,
             identifying_peak_mapping_scores: identifying_transition_scores,
         })
     }
@@ -1589,6 +1651,33 @@ impl Runner {
             }
         } else {
             log::warn!("No MS2 aligned features to write to the database");
+        }
+
+        Ok(())
+    }
+
+    fn write_ms2_alignment_candidate_results_to_db(
+        &self,
+        feature_access: &[FeatureAccessor],
+        results: &HashMap<i32, PrecursorAlignmentResult>,
+    ) -> Result<()> {
+        let mut all_candidate_alignments = Vec::new();
+        for alignment_result in results.values() {
+            for run_candidates in alignment_result.detecting_peak_mapping_candidates.values() {
+                all_candidate_alignments.extend(run_candidates.iter().cloned());
+            }
+        }
+
+        if !all_candidate_alignments.is_empty() {
+            for accessor in feature_access {
+                log::debug!(
+                    "Inserting {} MS2 alignment candidates",
+                    all_candidate_alignments.len()
+                );
+                accessor.insert_feature_ms2_alignment_candidate_batch(&all_candidate_alignments)?;
+            }
+        } else {
+            log::warn!("No MS2 alignment candidates to write to the database");
         }
 
         Ok(())
